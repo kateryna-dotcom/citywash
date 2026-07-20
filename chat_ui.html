@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ביורוקרטיה סיטי וואש</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
+    background: #e5ddd5; height: 100vh; display: flex; align-items: center; justify-content: center;
+  }
+  .phone {
+    width: 420px; max-width: 100vw; height: 100vh; max-height: 820px;
+    background: #e5ddd5; display: flex; flex-direction: column;
+    box-shadow: 0 0 20px rgba(0,0,0,0.3); border-radius: 8px; overflow: hidden;
+  }
+  .header {
+    background: #075E54; color: white; padding: 14px 16px;
+    display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+  }
+  .avatar {
+    width: 38px; height: 38px; border-radius: 50%; background: #128C7E;
+    display: flex; align-items: center; justify-content: center; font-size: 18px;
+  }
+  .header-text .name { font-weight: 600; font-size: 16px; }
+  .header-text .status { font-size: 12px; opacity: 0.8; }
+  .messages {
+    flex: 1; overflow-y: auto; padding: 16px 10px; display: flex; flex-direction: column; gap: 6px;
+  }
+  .bubble {
+    max-width: 78%; padding: 8px 12px; border-radius: 8px; font-size: 14.5px; line-height: 1.5;
+    white-space: pre-wrap; box-shadow: 0 1px 1px rgba(0,0,0,0.1); animation: pop .15s ease-out;
+  }
+  @keyframes pop { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .bot { align-self: flex-start; background: #fff; border-top-right-radius: 2px; }
+  .user { align-self: flex-end; background: #dcf8c6; border-top-left-radius: 2px; }
+  .hint { align-self: flex-start; color: #667781; font-size: 12px; padding: 0 12px; max-width: 78%; }
+  .quick-replies { display: flex; gap: 8px; flex-wrap: wrap; align-self: flex-end; justify-content: flex-end; margin: 4px 0; max-width: 90%; }
+  .quick-replies button {
+    background: white; border: 1px solid #128C7E; color: #075E54; border-radius: 16px;
+    padding: 7px 14px; font-size: 13.5px; cursor: pointer;
+  }
+  .quick-replies button:hover { background: #f0f0f0; }
+  .input-row {
+    flex-shrink: 0; display: flex; gap: 8px; padding: 10px; background: #f0f0f0;
+  }
+  .input-row input[type=text] {
+    flex: 1; border: none; border-radius: 20px; padding: 10px 16px; font-size: 14.5px; outline: none;
+  }
+  .input-row button {
+    background: #075E54; color: white; border: none; border-radius: 50%;
+    width: 40px; height: 40px; font-size: 16px; cursor: pointer; flex-shrink: 0;
+  }
+  .input-row button:disabled { opacity: 0.4; cursor: default; }
+  .download-btn {
+    align-self: flex-start; background: #128C7E; color: white; text-decoration: none;
+    padding: 10px 16px; border-radius: 8px; font-size: 14px; display: inline-block; margin-top: 4px;
+  }
+  .typing { align-self: flex-start; color: #667781; font-size: 13px; padding: 4px 12px; }
+</style>
+</head>
+<body>
+<div class="phone">
+  <div class="header">
+    <div class="avatar">🧽</div>
+    <div class="header-text">
+      <div class="name">ביורוקרטיה סיטי וואש</div>
+      <div class="status">בוט ליצירת מסמכי כוח אדם</div>
+    </div>
+  </div>
+  <div class="messages" id="messages"></div>
+  <div class="input-row" id="inputRow">
+    <input type="text" id="textInput" placeholder="הקלד/י תשובה..." autocomplete="off">
+    <button id="sendBtn">➤</button>
+  </div>
+</div>
+
+<script>
+const CONTRACT_TYPES = ["contract_manager", "contract_worker"];
+const SEP = ","; // separator used inside a grouped (multi-field) answer
+
+// Every doc type has a "steps" list. Step kinds:
+//   group  - several free-text fields answered in ONE message, separated by SEP
+//   date   - one date field, with a "today" quick-reply shortcut
+//   choice - one field answered via quick-reply buttons only
+//   text   - one free-text field
+const DOC_TYPES = {
+  contract_manager: {
+    label: "📝 חוזה עבודה – מנהל/ת תחנה",
+    steps: [
+      { kind: "group", fields: [
+          { key: "EMPLOYEE_NAME", label: "שם העובד/ת המלא" },
+          { key: "EMPLOYEE_ID", label: "מספר ת.ז. או דרכון" },
+          { key: "STATION_NAME", label: "תחנה" },
+        ] },
+      { kind: "date", key: "START_DATE", text: "תאריך תחילת עבודה?" },
+      { kind: "choice", key: "PAY_TYPE", text: "סוג שכר?", choices: [["חודשי","monthly"],["שעתי","hourly"]] },
+      { kind: "text", key: "AMOUNT", text: "סכום השכר בש\"ח?" },
+    ],
+  },
+  contract_worker: {
+    label: "📝 חוזה עבודה – עובד/ת",
+    steps: [
+      { kind: "group", fields: [
+          { key: "EMPLOYEE_NAME", label: "שם העובד/ת המלא" },
+          { key: "EMPLOYEE_ID", label: "מספר ת.ז. או דרכון" },
+          { key: "JOB_TITLE", label: "תפקיד (למשל: עובד ניגוב, מפעיל מכונה)" },
+          { key: "STATION_NAME", label: "תחנה" },
+        ] },
+      { kind: "date", key: "START_DATE", text: "תאריך תחילת עבודה?" },
+      { kind: "choice", key: "SCHEDULE_TYPE", text: "איזו משמרת?", choices: [["משרה קבועה (א׳-ה׳ 08:00-18:00, ו׳ 08:00-15:00)","fixed"],["משמרות (גמיש)","shift"]] },
+      { kind: "choice", key: "PAY_TYPE", text: "סוג שכר?", choices: [["חודשי","monthly"],["שעתי","hourly"]] },
+      { kind: "text", key: "AMOUNT", text: "סכום השכר בש\"ח?" },
+    ],
+  },
+  termination: {
+    label: "📄 מכתב פיטורים",
+    steps: [
+      { kind: "group", fields: [
+          { key: "EMPLOYEE_NAME", label: "שם העובד/ת המלא (ל'לכבוד')" },
+          { key: "EMPLOYEE_FIRST_NAME", label: "שם פרטי בלבד (לפנייה 'שלום ___')" },
+          { key: "EMPLOYEE_ID", label: "מספר ת.ז." },
+        ] },
+      { kind: "date", key: "LETTER_DATE", text: "תאריך המכתב?" },
+      { kind: "group", fields: [
+          { key: "HEARING_DATE", label: "תאריך השימוע שנערך" },
+          { key: "TERMINATION_DATE", label: "תאריך סיום ההעסקה בפועל" },
+        ] },
+    ],
+  },
+  hearing: {
+    label: "📋 הזמנה לשימוע",
+    steps: [
+      { kind: "group", fields: [
+          { key: "EMPLOYEE_NAME", label: "שם העובד/ת" },
+          { key: "HEARING_TIME", label: "שעת השימוע" },
+          { key: "REASON", label: "הסיבה לזימון לשימוע" },
+          { key: "STATION_MANAGER_NAME", label: "שם מנהל/ת התחנה (חותם/ת המכתב)" },
+        ] },
+      { kind: "date", key: "LETTER_DATE", text: "תאריך המכתב?" },
+      { kind: "date", key: "HEARING_DATE", text: "תאריך השימוע?" },
+    ],
+  },
+  confirmation: {
+    label: "✅ אישור העסקה",
+    steps: [
+      { kind: "group", fields: [
+          { key: "EMPLOYEE_NAME", label: "שם העובד/ת" },
+          { key: "EMPLOYEE_ID", label: "מספר ת.ז." },
+          { key: "STATION_NAME", label: "תחנה" },
+        ] },
+      { kind: "date", key: "LETTER_DATE", text: "תאריך המכתב?" },
+      { kind: "date", key: "START_DATE", text: "תאריך תחילת עבודה?" },
+    ],
+  },
+  safety: {
+    label: "🦺 הצהרת בטיחות",
+    steps: [
+      { kind: "group", fields: [
+          { key: "EMPLOYEE_NAME", label: "שם העובד/ת" },
+          { key: "EMPLOYEE_ID", label: "מספר ת.ז." },
+        ] },
+      { kind: "date", key: "SIGN_DATE", text: "תאריך החתימה?" },
+    ],
+  },
+};
+
+const messagesEl = document.getElementById("messages");
+const textInput = document.getElementById("textInput");
+const sendBtn = document.getElementById("sendBtn");
+const inputRow = document.getElementById("inputRow");
+
+let docType = null;
+let step = 0;
+let data = {};
+let groupFilled = 0; // how many fields of the current "group" step are already answered
+
+function todayStr() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, "0");
+  return `${pad(d.getDate())}.${pad(d.getMonth()+1)}.${d.getFullYear()}`;
+}
+
+function addBubble(text, who) {
+  const div = document.createElement("div");
+  div.className = "bubble " + who;
+  div.textContent = text;
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return div;
+}
+
+function addHint(text) {
+  const div = document.createElement("div");
+  div.className = "hint";
+  div.textContent = text;
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function addQuickReplies(options, onPick) {
+  const wrap = document.createElement("div");
+  wrap.className = "quick-replies";
+  options.forEach(([label, value]) => {
+    const btn = document.createElement("button");
+    btn.textContent = label;
+    btn.onclick = () => { wrap.remove(); onPick(label, value); };
+    wrap.appendChild(btn);
+  });
+  messagesEl.appendChild(wrap);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return wrap;
+}
+
+function botSay(text, delay=400) {
+  return new Promise(resolve => {
+    const typing = document.createElement("div");
+    typing.className = "typing";
+    typing.textContent = "מקליד/ה...";
+    messagesEl.appendChild(typing);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    setTimeout(() => {
+      typing.remove();
+      addBubble(text, "bot");
+      resolve();
+    }, delay);
+  });
+}
+
+async function start() {
+  inputRow.style.display = "none";
+  await botSay("שלום! כאן ביורוקרטיה סיטי וואש 🧽 איזה מסמך תרצי ליצור?", 300);
+  const options = Object.entries(DOC_TYPES).map(([key, cfg]) => [cfg.label, key]);
+  addQuickReplies(options, (label, key) => {
+    docType = key;
+    step = 0;
+    data = {};
+    groupFilled = 0;
+    addBubble(label, "user");
+    askCurrentStep();
+  });
+}
+
+function currentSteps() {
+  return DOC_TYPES[docType].steps;
+}
+
+async function askCurrentStep() {
+  const s = currentSteps()[step];
+  if (s.kind === "group") {
+    const remaining = s.fields.slice(groupFilled);
+    const listText = remaining.map((f, i) => `${i+1}. ${f.label}`).join("\n");
+    await botSay(listText);
+    addHint(`אפשר לשלוח הכל בהודעה אחת (מופרד ב-"${SEP}"), או פריט אחד בכל הודעה — איך שנוח לך.`);
+    inputRow.style.display = "flex";
+    textInput.focus();
+  } else if (s.kind === "choice") {
+    await botSay(s.text);
+    inputRow.style.display = "none";
+    addQuickReplies(s.choices, (label, value) => {
+      inputRow.style.display = "flex";
+      handleSingleAnswer(s.key, label, value);
+    });
+  } else if (s.kind === "date") {
+    await botSay(s.text);
+    inputRow.style.display = "flex";
+    addQuickReplies([["📅 היום (" + todayStr() + ")", todayStr()]], (label, value) => {
+      handleSingleAnswer(s.key, value);
+    });
+    textInput.focus();
+  } else {
+    await botSay(s.text);
+    inputRow.style.display = "flex";
+    textInput.focus();
+  }
+}
+
+function advanceStep() {
+  step++;
+  groupFilled = 0;
+  if (step < currentSteps().length) {
+    askCurrentStep();
+  } else {
+    showSummary();
+  }
+}
+
+function handleSingleAnswer(key, displayText, storedValue) {
+  addBubble(displayText, "user");
+  data[key] = storedValue !== undefined ? storedValue : displayText;
+  advanceStep();
+}
+
+// Accepts either "value1, value2, value3" in one message, or one value per
+// message sent in order — whichever the person finds more natural.
+function splitGroupAnswer(raw) {
+  const stripNumbering = s => s.replace(/^\s*\d+[.)]\s*/, "").trim();
+  let lines = raw.split("\n").map(stripNumbering).filter(x => x.length > 0);
+  if (lines.length > 1) return lines;
+  return raw.split(SEP).map(stripNumbering).filter(x => x.length > 0);
+}
+
+async function handleGroupAnswer(rawText) {
+  addBubble(rawText, "user");
+  const s = currentSteps()[step];
+  const remaining = s.fields.slice(groupFilled);
+  const parts = splitGroupAnswer(rawText);
+
+  const take = Math.min(parts.length, remaining.length);
+  for (let i = 0; i < take; i++) {
+    data[remaining[i].key] = parts[i];
+  }
+  groupFilled += take;
+
+  if (groupFilled >= s.fields.length) {
+    advanceStep();
+  } else {
+    const stillNeeded = s.fields.slice(groupFilled);
+    await botSay("קיבלתי. נשארו עוד:\n" + stillNeeded.map((f, i) => `${i+1}. ${f.label}`).join("\n"));
+  }
+}
+
+function fieldLabel(key) {
+  for (const s of currentSteps()) {
+    if (s.kind === "group") {
+      const f = s.fields.find(f => f.key === key);
+      if (f) return f.label;
+    } else if (s.key === key) {
+      return s.text.replace(/\?$/, "");
+    }
+  }
+  return key;
+}
+
+async function showSummary() {
+  let lines = ["בדוק/י שהפרטים נכונים:"];
+  for (const s of currentSteps()) {
+    const keys = s.kind === "group" ? s.fields.map(f => f.key) : [s.key];
+    for (const key of keys) {
+      let val = data[key];
+      if (s.kind === "choice") {
+        const found = s.choices.find(([label, value]) => value === val);
+        val = found ? found[0] : val;
+      }
+      lines.push(`${fieldLabel(key)}: ${val}`);
+    }
+  }
+  if (CONTRACT_TYPES.includes(docType)) {
+    lines.push("", "🦺 הצהרת הבטיחות תצורף אוטומטית לאותו PDF.");
+  }
+  await botSay(lines.join("\n"), 300);
+  inputRow.style.display = "none";
+  addQuickReplies([["✅ כן, צור מסמך","yes"],["❌ לא, בטל","no"]], async (label, value) => {
+    if (value === "yes") {
+      await generateDocument();
+    } else {
+      await botSay("בוטל. רענן/י את הדף כדי להתחיל שוב.");
+    }
+  });
+}
+
+async function generateDocument() {
+  await botSay("רגע, מכין/ה את המסמך...", 200);
+  try {
+    const res = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ doc_type: docType, fields: data }),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(errText);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const div = document.createElement("div");
+    div.className = "bubble bot";
+    const fname = `${docType}_${data.EMPLOYEE_NAME || "document"}.pdf`;
+    const readyText = CONTRACT_TYPES.includes(docType) ? "החוזה + הצהרת הבטיחות מוכנים (קובץ אחד)!" : "המסמך מוכן!";
+    div.innerHTML = `${readyText} <br><a class="download-btn" href="${url}" download="${fname}">⬇️ הורד/י PDF</a>`;
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    await botSay("רוצה ליצור עוד מסמך? רענן/י את הדף.", 400);
+  } catch (e) {
+    await botSay("שגיאה ביצירת המסמך: " + e.message);
+  }
+}
+
+sendBtn.onclick = () => {
+  const val = textInput.value.trim();
+  if (!val) return;
+  textInput.value = "";
+  const s = currentSteps()[step];
+  if (s.kind === "group") {
+    handleGroupAnswer(val);
+  } else {
+    handleSingleAnswer(s.key, val);
+  }
+};
+textInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") sendBtn.click();
+});
+
+start();
+</script>
+</body>
+</html>
