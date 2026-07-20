@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY contract_filler.py web_app.py chat_ui.html ./
 COPY employment_contract_template_ABT.docx employment_contract_template_worker.docx template_piturim.docx template_shimua.docx template_ishur_haaskaa.docx template_betichut.docx ./
-COPY whatsapp_bot_app.py ./
+
 
 ENV CONTRACT_TEMPLATE_PATH=/app/employment_contract_template_ABT.docx
 EXPOSE 8000
