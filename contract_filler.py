@@ -2,6 +2,7 @@
 Fills the tokenized A.B.T. employment contract template and converts it to PDF.
 Works directly on the .docx bytes (no need to pre-unzip).
 """
+import datetime
 import io
 import os
 import re
@@ -138,6 +139,81 @@ def fill_worker_contract(template_path: str, fields: dict, pay_type: str, schedu
 
     parts["word/document.xml"] = xml.encode("utf-8")
     return _write_docx(parts)
+
+
+_HEBREW_WEEKDAY_BY_PY_WEEKDAY = {
+    6: "א",     # Sunday
+    0: "ב",     # Monday
+    1: "ג",     # Tuesday
+    2: "ד",     # Wednesday
+    3: "ה",     # Thursday
+    4: "ו",     # Friday
+    5: "שבת",   # Saturday
+}
+_WEEKDAY_LETTERS = ("א", "ב", "ג", "ד", "ה", "ו", "שבת")
+
+
+def _iter_all_paragraphs(container):
+    """Yield every paragraph in a Document or table cell, including nested tables."""
+    for p in container.paragraphs:
+        yield p
+    for table in container.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                yield from _iter_all_paragraphs(cell)
+
+
+def fill_incident_notice(template_path: str, fields: dict) -> bytes:
+    """
+    Fills the insurance incident-notice form (טופס הודעה על אירוע).
+
+    fields must contain: BRANCH_NAME, INCIDENT_DATE (DD.MM.YYYY), INCIDENT_STREET,
+    INCIDENT_NUMBER, INCIDENT_CITY, INCIDENT_DESCRIPTION, CAR_PLATE, DAMAGED_PROPERTY.
+
+    The "היום בשבוע" (day of week) line is computed automatically from INCIDENT_DATE
+    and highlighted (bold + underline) on the matching letter -- no separate question.
+    """
+    import docx
+
+    document = docx.Document(template_path)
+
+    for p in _iter_all_paragraphs(document):
+        for run in p.runs:
+            if "{{" in run.text:
+                text = run.text
+                for key, value in fields.items():
+                    text = text.replace("{{%s}}" % key, str(value))
+                run.text = text
+
+    leftover = set()
+    for p in _iter_all_paragraphs(document):
+        leftover.update(TOKEN_PATTERN.findall(p.text))
+    if leftover:
+        raise ValueError(f"Missing values for tokens: {leftover}")
+
+    target_letter = None
+    incident_date_str = fields.get("INCIDENT_DATE", "")
+    try:
+        day, month, year = incident_date_str.split(".")
+        incident_date = datetime.date(int(year), int(month), int(day))
+        target_letter = _HEBREW_WEEKDAY_BY_PY_WEEKDAY[incident_date.weekday()]
+    except (ValueError, KeyError):
+        pass
+
+    if target_letter:
+        for p in _iter_all_paragraphs(document):
+            run_texts = [r.text for r in p.runs]
+            if "בשבוע" in run_texts and any(t in _WEEKDAY_LETTERS for t in run_texts):
+                for run in p.runs:
+                    if run.text in _WEEKDAY_LETTERS:
+                        is_target = run.text == target_letter
+                        run.font.bold = is_target
+                        run.font.underline = is_target
+                break
+
+    buf = io.BytesIO()
+    document.save(buf)
+    return buf.getvalue()
 
 
 def docx_to_pdf(docx_bytes: bytes) -> bytes:

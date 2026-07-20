@@ -164,6 +164,23 @@ const DOC_TYPES = {
       { kind: "date", key: "SIGN_DATE", text: "תאריך החתימה?" },
     ],
   },
+  incident_notice: {
+    label: "🚗 הודעה על אירוע/נזק לביטוח",
+    steps: [
+      { kind: "group", fields: [
+          { key: "BRANCH_NAME", label: "באיזה סניף קרה האירוע" },
+          { key: "CAR_PLATE", label: "מספר רכב הלקוח שנפגע" },
+          { key: "DAMAGED_PROPERTY", label: "מה ניזוק (למשל: מברשת שטיפה)" },
+        ] },
+      { kind: "date", key: "INCIDENT_DATE", text: "באיזה תאריך קרה האירוע?" },
+      { kind: "group", fields: [
+          { key: "INCIDENT_STREET", label: "רחוב (כתובת מקום האירוע)" },
+          { key: "INCIDENT_NUMBER", label: "מספר בית" },
+          { key: "INCIDENT_CITY", label: "עיר" },
+        ] },
+      { kind: "text", key: "INCIDENT_DESCRIPTION", text: "תארי בכמה מילים מה קרה (מה גרם לנזק)?" },
+    ],
+  },
 };
 
 const messagesEl = document.getElementById("messages");
@@ -376,7 +393,7 @@ async function generateDocument() {
     const url = URL.createObjectURL(blob);
     const div = document.createElement("div");
     div.className = "bubble bot";
-    const fname = `${docType}_${data.EMPLOYEE_NAME || "document"}.pdf`;
+    const fname = `${docType}_${data.EMPLOYEE_NAME || data.BRANCH_NAME || "document"}.pdf`;
     const readyText = CONTRACT_TYPES.includes(docType) ? "החוזה + הצהרת הבטיחות מוכנים (קובץ אחד)!" : "המסמך מוכן!";
     div.innerHTML = `${readyText} <br><a class="download-btn" href="${url}" download="${fname}">⬇️ הורד/י PDF</a>`;
     messagesEl.appendChild(div);

@@ -22,7 +22,14 @@ from urllib.parse import quote
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, Response
 
-from contract_filler import fill_contract, fill_worker_contract, fill_document, docx_to_pdf, merge_pdfs
+from contract_filler import (
+    fill_contract,
+    fill_worker_contract,
+    fill_document,
+    fill_incident_notice,
+    docx_to_pdf,
+    merge_pdfs,
+)
 
 app = FastAPI()
 
@@ -36,6 +43,7 @@ DOCUMENT_REGISTRY = {
     "hearing": {"template": "template_shimua.docx", "kind": "generic"},
     "confirmation": {"template": "template_ishur_haaskaa.docx", "kind": "generic"},
     "safety": {"template": "template_betichut.docx", "kind": "generic"},
+    "incident_notice": {"template": "template_incident_notice.docx", "kind": "incident_notice"},
 }
 
 # When the key document is generated, also generate and append these documents.
@@ -72,6 +80,8 @@ def _build_pdf_for(doc_type: str, fields: dict) -> bytes:
         else:
             fields["MONTHLY_SALARY"] = amount
         docx_bytes = fill_worker_contract(entry["template"], fields, pay_type, schedule_type)
+    elif entry["kind"] == "incident_notice":
+        docx_bytes = fill_incident_notice(entry["template"], fields)
     else:
         docx_bytes = fill_document(entry["template"], fields)
     return docx_to_pdf(docx_bytes)
@@ -117,7 +127,7 @@ async def generate(request: Request):
     except Exception as e:  # noqa: BLE001
         return Response(f"Error generating document: {e}", status_code=500)
 
-    name_part = fields.get("EMPLOYEE_NAME", "document")
+    name_part = fields.get("EMPLOYEE_NAME") or fields.get("BRANCH_NAME") or "document"
     filename = f"{doc_type}_{name_part}.pdf"
     # HTTP headers must be latin-1; Hebrew names aren't, so send an ASCII
     # fallback plus the real UTF-8 name via the filename* parameter (RFC 5987).
