@@ -16,6 +16,8 @@ Deploy anywhere that runs Docker (Render, Railway, Fly.io, a VPS, ...).
 Requires LibreOffice on the host for the docx -> pdf conversion (see Dockerfile).
 """
 import os
+import re
+from urllib.parse import quote
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, Response
@@ -117,10 +119,19 @@ async def generate(request: Request):
 
     name_part = fields.get("EMPLOYEE_NAME", "document")
     filename = f"{doc_type}_{name_part}.pdf"
+    # HTTP headers must be latin-1; Hebrew names aren't, so send an ASCII
+    # fallback plus the real UTF-8 name via the filename* parameter (RFC 5987).
+    ascii_filename = re.sub(r"[^\x20-\x7E]", "_", filename)
+    utf8_filename = quote(filename)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_filename}"; '
+                f"filename*=UTF-8''{utf8_filename}"
+            )
+        },
     )
 
 
