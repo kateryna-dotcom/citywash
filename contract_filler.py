@@ -216,6 +216,65 @@ def fill_incident_notice(template_path: str, fields: dict) -> bytes:
     return buf.getvalue()
 
 
+def fill_hearing_invitation(template_path: str, fields: dict) -> bytes:
+    """
+    Fills the הזמנה לשימוע (hearing invitation) template.
+
+    Same generic {{TOKEN}} replacement as fill_document, except REASON is
+    special: it may contain several reasons (one per line, or separated by
+    ";"), and each one gets its own bullet line in the output -- not just a
+    single line squashed into one bullet.
+    """
+    import copy
+
+    import docx
+    from docx.text.paragraph import Paragraph
+
+    document = docx.Document(template_path)
+
+    reasons_raw = fields.get("REASON", "")
+    reasons = [r.strip() for r in re.split(r"[\n;]+", reasons_raw) if r.strip()]
+    if not reasons:
+        reasons = [reasons_raw]
+
+    bullet_paragraph = None
+    for p in _iter_all_paragraphs(document):
+        if "{{REASON}}" in p.text:
+            bullet_paragraph = p
+            break
+
+    if bullet_paragraph is not None:
+        anchor = bullet_paragraph._p
+        parent = bullet_paragraph._parent
+        for reason in reasons:
+            new_p_element = copy.deepcopy(anchor)
+            new_paragraph = Paragraph(new_p_element, parent)
+            for run in new_paragraph.runs:
+                if "{{REASON}}" in run.text:
+                    run.text = run.text.replace("{{REASON}}", reason)
+            anchor.addprevious(new_p_element)
+        anchor.getparent().remove(anchor)
+
+    other_fields = {k: v for k, v in fields.items() if k != "REASON"}
+    for p in _iter_all_paragraphs(document):
+        for run in p.runs:
+            if "{{" in run.text:
+                text = run.text
+                for key, value in other_fields.items():
+                    text = text.replace("{{%s}}" % key, str(value))
+                run.text = text
+
+    leftover = set()
+    for p in _iter_all_paragraphs(document):
+        leftover.update(TOKEN_PATTERN.findall(p.text))
+    if leftover:
+        raise ValueError(f"Missing values for tokens: {leftover}")
+
+    buf = io.BytesIO()
+    document.save(buf)
+    return buf.getvalue()
+
+
 def docx_to_pdf(docx_bytes: bytes) -> bytes:
     """Convert docx bytes to pdf bytes via headless LibreOffice. Requires `soffice` on PATH."""
     with tempfile.TemporaryDirectory() as tmp:

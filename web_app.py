@@ -27,6 +27,7 @@ from contract_filler import (
     fill_worker_contract,
     fill_document,
     fill_incident_notice,
+    fill_hearing_invitation,
     docx_to_pdf,
     merge_pdfs,
 )
@@ -40,7 +41,7 @@ DOCUMENT_REGISTRY = {
     "contract_manager": {"template": "employment_contract_template_ABT.docx", "kind": "contract"},
     "contract_worker": {"template": "employment_contract_template_worker.docx", "kind": "worker_contract"},
     "termination": {"template": "template_piturim.docx", "kind": "generic"},
-    "hearing": {"template": "template_shimua.docx", "kind": "generic"},
+    "hearing": {"template": "template_shimua.docx", "kind": "hearing_invitation"},
     "confirmation": {"template": "template_ishur_haaskaa.docx", "kind": "generic"},
     "safety": {"template": "template_betichut.docx", "kind": "generic"},
     "incident_notice": {"template": "template_incident_notice.docx", "kind": "incident_notice"},
@@ -82,6 +83,8 @@ def _build_pdf_for(doc_type: str, fields: dict) -> bytes:
         docx_bytes = fill_worker_contract(entry["template"], fields, pay_type, schedule_type)
     elif entry["kind"] == "incident_notice":
         docx_bytes = fill_incident_notice(entry["template"], fields)
+    elif entry["kind"] == "hearing_invitation":
+        docx_bytes = fill_hearing_invitation(entry["template"], fields)
     else:
         docx_bytes = fill_document(entry["template"], fields)
     return docx_to_pdf(docx_bytes)

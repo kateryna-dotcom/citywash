@@ -147,11 +147,11 @@ const DOC_TYPES = {
       { kind: "group", fields: [
           { key: "EMPLOYEE_NAME", label: "שם העובד/ת" },
           { key: "HEARING_TIME", label: "שעת השימוע" },
-          { key: "REASON", label: "הסיבה לזימון לשימוע" },
           { key: "STATION_MANAGER_NAME", label: "שם מנהל/ת התחנה (חותם/ת המכתב)" },
         ] },
       { kind: "date", key: "LETTER_DATE", text: "תאריך המכתב?" },
       { kind: "date", key: "HEARING_DATE", text: "תאריך השימוע?" },
+      { kind: "text", key: "REASON", text: "מה הסיבות לזימון לשימוע? (אפשר כמה סיבות, מופרדות ב-\";\" — כל אחת תופיע כשורה נפרדת במכתב)" },
     ],
   },
   confirmation: {
