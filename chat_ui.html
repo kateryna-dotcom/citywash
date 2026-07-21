@@ -80,6 +80,18 @@
 const CONTRACT_TYPES = ["contract_manager", "contract_worker"];
 const SEP = ","; // separator used inside a grouped (multi-field) answer
 
+// The 7 companies the bot can generate documents for. Picked as the very
+// first question; name + ח.פ. are then auto-filled into every document.
+const COMPANIES = [
+  { name: "י.ב.אר שטיפת רכב בע\"מ", id: "516770773" },
+  { name: "א.ב.י. שטיפת רכב בע\"מ", id: "516090289" },
+  { name: "בי. יו. אי. שטיפת רכבים", id: "516975687" },
+  { name: "א.א. רכב ורכב בע\"מ", id: "517118485" },
+  { name: "ג'יקובס שירותי רכב בע\"מ", id: "516774312" },
+  { name: "רמי מרדכייב בע\"מ", id: "516518289" },
+  { name: "א.ב.ת. שירותי שטיפה בע\"מ", id: "514896737" },
+];
+
 // Every doc type has a "steps" list. Step kinds:
 //   group  - several free-text fields answered in ONE message, separated by SEP
 //   date   - one date field, with a "today" quick-reply shortcut
@@ -247,12 +259,22 @@ function botSay(text, delay=400) {
 
 async function start() {
   inputRow.style.display = "none";
-  await botSay("שלום! כאן ביורוקרטיה סיטי וואש 🧽 איזה מסמך תרצי ליצור?", 300);
+  await botSay("שלום! כאן ביורוקרטיה סיטי וואש 🧽 קודם כל, איזו חברה?", 300);
+  const options = COMPANIES.map(c => [c.name, c]);
+  addQuickReplies(options, (label, company) => {
+    data.COMPANY_NAME = company.name;
+    data.COMPANY_ID = company.id;
+    addBubble(label, "user");
+    askDocType();
+  });
+}
+
+async function askDocType() {
+  await botSay("איזה מסמך תרצי ליצור?");
   const options = Object.entries(DOC_TYPES).map(([key, cfg]) => [cfg.label, key]);
   addQuickReplies(options, (label, key) => {
     docType = key;
     step = 0;
-    data = {};
     groupFilled = 0;
     addBubble(label, "user");
     askCurrentStep();
@@ -351,7 +373,7 @@ function fieldLabel(key) {
 }
 
 async function showSummary() {
-  let lines = ["בדוק/י שהפרטים נכונים:"];
+  let lines = ["בדוק/י שהפרטים נכונים:", `חברה: ${data.COMPANY_NAME}`];
   for (const s of currentSteps()) {
     const keys = s.kind === "group" ? s.fields.map(f => f.key) : [s.key];
     for (const key of keys) {
