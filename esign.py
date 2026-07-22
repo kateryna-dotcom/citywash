@@ -52,7 +52,7 @@ def _login() -> str:
 
 def _upload_file(token: str, pdf_bytes: bytes, filename: str) -> dict:
     resp = requests.post(
-        f"{BASE_URL}/api/Tasks/UploadFileForTask",
+        f"{BASE_URL}/api/V2/BaseTasks/UploadFileForTask",
         headers={"Authorization": f"Bearer {token}"},
         files={"FileName": (filename, pdf_bytes, "application/pdf")},
         data={"Name": "fileUpload"},
@@ -80,7 +80,7 @@ def send_for_sms_signature(pdf_bytes: bytes, phone: str, subject: str,
         raise RuntimeError(f"2Sign upload did not return TaskGuid/PdfGuid: {upload}")
 
     resp = requests.post(
-        f"{BASE_URL}/api/Tasks/CreateTaskWithFileOption",
+        f"{BASE_URL}/api/V2/TasksNew/CreateTask",
         headers={"Authorization": f"Bearer {token}"},
         json={
             "ClientPhones": phone,
