@@ -35,7 +35,7 @@ from esign import send_for_sms_signature
 
 # doc_type keys that support the "send for SMS signature" option -- each of
 # these templates has an invisible marker (§) placed at the signature spot.
-SMS_SIGNABLE_DOC_TYPES = {"contract_manager", "contract_worker", "termination", "hearing"}
+SMS_SIGNABLE_DOC_TYPES = {"contract_manager", "contract_worker", "termination", "hearing", "confirmation"}
 
 app = FastAPI()
 
