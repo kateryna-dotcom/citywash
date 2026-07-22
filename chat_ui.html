@@ -78,6 +78,7 @@
 
 <script>
 const CONTRACT_TYPES = ["contract_manager", "contract_worker"];
+const SMS_SIGNABLE_DOC_TYPES = ["contract_manager", "contract_worker", "termination", "hearing"];
 const SEP = ","; // separator used inside a grouped (multi-field) answer
 
 // The 7 companies the bot can generate documents for. Picked as the very
@@ -399,6 +400,8 @@ async function showSummary() {
   });
 }
 
+let awaitingPhoneNumber = false;
+
 async function generateDocument() {
   await botSay("רגע, מכין/ה את המסמך...", 200);
   try {
@@ -420,16 +423,57 @@ async function generateDocument() {
     div.innerHTML = `${readyText} <br><a class="download-btn" href="${url}" download="${fname}">⬇️ הורד/י PDF</a>`;
     messagesEl.appendChild(div);
     messagesEl.scrollTop = messagesEl.scrollHeight;
-    await botSay("רוצה ליצור עוד מסמך? רענן/י את הדף.", 400);
+
+    if (SMS_SIGNABLE_DOC_TYPES.includes(docType)) {
+      await botSay("אפשר גם לשלוח את המסמך לחתימה דיגיטלית ב-SMS. רוצה?", 400);
+      inputRow.style.display = "none";
+      addQuickReplies([["📲 כן, שלח/י לחתימה ב-SMS","yes"],["לא תודה","no"]], async (label, value) => {
+        if (value === "yes") {
+          await botSay("מה מספר הטלפון של החותם/ת?");
+          inputRow.style.display = "flex";
+          awaitingPhoneNumber = true;
+          textInput.focus();
+        } else {
+          await botSay("בסדר. רוצה ליצור עוד מסמך? רענן/י את הדף.", 300);
+        }
+      });
+    } else {
+      await botSay("רוצה ליצור עוד מסמך? רענן/י את הדף.", 400);
+    }
   } catch (e) {
     await botSay("שגיאה ביצירת המסמך: " + e.message);
   }
+}
+
+async function sendForSmsSignature(phone) {
+  addBubble(phone, "user");
+  await botSay("שולח/ת לחתימה...", 200);
+  try {
+    const res = await fetch("/api/send-for-signature", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ doc_type: docType, fields: data, phone }),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(errText);
+    }
+    await botSay("נשלח! החותם/ת יקבל/תקבל SMS עם קישור לחתימה.", 300);
+  } catch (e) {
+    await botSay("שגיאה בשליחה לחתימה: " + e.message);
+  }
+  await botSay("רוצה ליצור עוד מסמך? רענן/י את הדף.", 400);
 }
 
 sendBtn.onclick = () => {
   const val = textInput.value.trim();
   if (!val) return;
   textInput.value = "";
+  if (awaitingPhoneNumber) {
+    awaitingPhoneNumber = false;
+    sendForSmsSignature(val);
+    return;
+  }
   const s = currentSteps()[step];
   if (s.kind === "group") {
     handleGroupAnswer(val);

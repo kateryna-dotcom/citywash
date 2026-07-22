@@ -31,6 +31,11 @@ from contract_filler import (
     docx_to_pdf,
     merge_pdfs,
 )
+from esign import send_for_sms_signature
+
+# doc_type keys that support the "send for SMS signature" option -- each of
+# these templates has an invisible marker (§) placed at the signature spot.
+SMS_SIGNABLE_DOC_TYPES = {"contract_manager", "contract_worker", "termination", "hearing"}
 
 app = FastAPI()
 
@@ -101,6 +106,20 @@ def _fields_for_bundle_doc(bundle_doc_type: str, main_fields: dict) -> dict:
     return {}
 
 
+def _build_final_pdf(doc_type: str, fields: dict) -> bytes:
+    """Builds the main document PDF and merges in any bundled documents (e.g. safety declaration)."""
+    # main_fields is consumed (mutated) by _build_pdf_for for "contract" kind,
+    # so derive bundle fields from a copy first.
+    bundle_source_fields = dict(fields)
+    pdf_bytes = _build_pdf_for(doc_type, fields)
+
+    for bundle_doc_type in BUNDLES.get(doc_type, []):
+        bundle_fields = _fields_for_bundle_doc(bundle_doc_type, bundle_source_fields)
+        bundle_pdf = _build_pdf_for(bundle_doc_type, bundle_fields)
+        pdf_bytes = merge_pdfs([pdf_bytes, bundle_pdf])
+    return pdf_bytes
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
     with open(HTML_PATH, encoding="utf-8") as f:
@@ -118,15 +137,7 @@ async def generate(request: Request):
         return Response(f"Unknown doc_type: {doc_type}", status_code=400)
 
     try:
-        # main_fields is consumed (mutated) by _build_pdf_for for "contract" kind,
-        # so derive bundle fields from a copy first.
-        bundle_source_fields = dict(fields)
-        pdf_bytes = _build_pdf_for(doc_type, fields)
-
-        for bundle_doc_type in BUNDLES.get(doc_type, []):
-            bundle_fields = _fields_for_bundle_doc(bundle_doc_type, bundle_source_fields)
-            bundle_pdf = _build_pdf_for(bundle_doc_type, bundle_fields)
-            pdf_bytes = merge_pdfs([pdf_bytes, bundle_pdf])
+        pdf_bytes = _build_final_pdf(doc_type, fields)
     except Exception as e:  # noqa: BLE001
         return Response(f"Error generating document: {e}", status_code=500)
 
@@ -146,6 +157,36 @@ async def generate(request: Request):
             )
         },
     )
+
+
+@app.post("/api/send-for-signature")
+async def send_for_signature(request: Request):
+    payload = await request.json()
+    doc_type = payload.get("doc_type")
+    fields = payload.get("fields") or {}
+    phone = (payload.get("phone") or "").strip()
+
+    if doc_type not in SMS_SIGNABLE_DOC_TYPES:
+        return Response(f"SMS signing not available for: {doc_type}", status_code=400)
+    if not phone:
+        return Response("Missing phone number", status_code=400)
+    if DOCUMENT_REGISTRY.get(doc_type) is None:
+        return Response(f"Unknown doc_type: {doc_type}", status_code=400)
+
+    name_part = fields.get("EMPLOYEE_NAME") or fields.get("BRANCH_NAME") or "document"
+
+    try:
+        pdf_bytes = _build_final_pdf(doc_type, fields)
+        result = send_for_sms_signature(
+            pdf_bytes,
+            phone=phone,
+            subject=f"מסמך לחתימה - {name_part}",
+            filename=f"{doc_type}_{name_part}.pdf",
+        )
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error sending for signature: {e}", status_code=500)
+
+    return {"status": "sent", "task_guid": result.get("TaskGuid")}
 
 
 @app.get("/health")
