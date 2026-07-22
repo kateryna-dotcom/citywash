@@ -91,6 +91,8 @@ def send_for_sms_signature(pdf_bytes: bytes, phone: str, subject: str,
             "IsSendOnCreation": True,
             "IsSendSmsOnCreation": True,
             "SearchWordForMarkingSignature": SIGNATURE_MARKER,
+            "ViewOnlyTask": False,
+            "DigitalSign": True,
         },
         timeout=60,
     )
