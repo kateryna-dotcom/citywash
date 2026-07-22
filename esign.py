@@ -22,6 +22,13 @@ BASE_URL = "https://app.2sign.co.il"
 SIGNATURE_MARKER = "§"
 
 
+def _unwrap(data: dict) -> dict:
+    """2Sign wraps every response as {Status, Message, ResponseObject: {...actual data...}}."""
+    if isinstance(data, dict) and isinstance(data.get("ResponseObject"), dict):
+        return data["ResponseObject"]
+    return data
+
+
 def _login() -> str:
     email = os.environ.get("TWOSIGN_EMAIL")
     password = os.environ.get("TWOSIGN_PASSWORD")
@@ -36,10 +43,10 @@ def _login() -> str:
         timeout=30,
     )
     resp.raise_for_status()
-    data = resp.json()
+    data = _unwrap(resp.json())
     token = data.get("access_token") or data.get("Access_Token") or data.get("AccessToken")
     if not token:
-        raise RuntimeError(f"2Sign login did not return an access_token: {data}")
+        raise RuntimeError("2Sign login did not return an access_token (check credentials / API access)")
     return token
 
 
@@ -52,7 +59,7 @@ def _upload_file(token: str, pdf_bytes: bytes, filename: str) -> dict:
         timeout=60,
     )
     resp.raise_for_status()
-    return resp.json()
+    return _unwrap(resp.json())
 
 
 def send_for_sms_signature(pdf_bytes: bytes, phone: str, subject: str,
@@ -88,8 +95,9 @@ def send_for_sms_signature(pdf_bytes: bytes, phone: str, subject: str,
         timeout=60,
     )
     resp.raise_for_status()
-    result = resp.json()
-    result.setdefault("TaskGuid", task_guid)
+    result = _unwrap(resp.json())
+    if isinstance(result, dict):
+        result.setdefault("TaskGuid", task_guid)
     return result
 
 
@@ -103,4 +111,4 @@ def get_task_status(task_guid: str) -> dict:
         timeout=30,
     )
     resp.raise_for_status()
-    return resp.json()
+    return _unwrap(resp.json())
