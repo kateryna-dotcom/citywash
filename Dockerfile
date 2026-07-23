@@ -10,7 +10,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY contract_filler.py web_app.py chat_ui.html esign.py ./
+COPY contract_filler.py web_app.py chat_ui.html esign.py pension_store.py dashboard.html login.html pension.html ./
 COPY employment_contract_template_ABT.docx employment_contract_template_worker.docx template_piturim.docx template_shimua.docx template_ishur_haaskaa.docx template_betichut.docx template_incident_notice.docx ./
 
 ENV CONTRACT_TEMPLATE_PATH=/app/employment_contract_template_ABT.docx

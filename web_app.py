@@ -20,7 +20,8 @@ import re
 from urllib.parse import quote
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
 
 from contract_filler import (
     fill_contract,
@@ -32,14 +33,54 @@ from contract_filler import (
     merge_pdfs,
 )
 from esign import send_for_sms_signature
+import pension_store
 
 # doc_type keys that support the "send for SMS signature" option -- each of
 # these templates has an invisible marker (§) placed at the signature spot.
 SMS_SIGNABLE_DOC_TYPES = {"contract_manager", "contract_worker", "termination", "hearing", "confirmation"}
 
 app = FastAPI()
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.environ.get("SESSION_SECRET", "dev-only-change-me"),
+    max_age=60 * 60 * 24 * 14,  # 2 weeks
+)
 
-HTML_PATH = os.path.join(os.path.dirname(__file__), "chat_ui.html")
+BASE_DIR = os.path.dirname(__file__)
+HTML_PATH = os.path.join(BASE_DIR, "chat_ui.html")
+DASHBOARD_HTML_PATH = os.path.join(BASE_DIR, "dashboard.html")
+LOGIN_HTML_PATH = os.path.join(BASE_DIR, "login.html")
+PENSION_HTML_PATH = os.path.join(BASE_DIR, "pension.html")
+
+
+@app.on_event("startup")
+def _startup():
+    # Creates the pension_records table if it doesn't exist yet. If the DB
+    # isn't configured yet (e.g. first deploy before Postgres is connected),
+    # don't crash the whole app -- the /api/pension/* routes will just fail
+    # until DATABASE_URL / PENSION_ENCRYPTION_KEY are set.
+    try:
+        pension_store.init_db()
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] pension_store.init_db() skipped: {e}")
+
+
+def _is_authenticated(request: Request) -> bool:
+    return bool(request.session.get("authenticated"))
+
+
+def _require_page_auth(request: Request):
+    """Returns a redirect Response if not logged in, otherwise None."""
+    if not _is_authenticated(request):
+        return RedirectResponse("/login", status_code=303)
+    return None
+
+
+def _require_api_auth(request: Request):
+    """Returns a 401 Response if not logged in, otherwise None."""
+    if not _is_authenticated(request):
+        return Response("Unauthorized - please log in again", status_code=401)
+    return None
 
 # doc_type key -> template file. Must match the keys used in chat_ui.html's DOC_TYPES.
 DOCUMENT_REGISTRY = {
@@ -121,13 +162,68 @@ def _build_final_pdf(doc_type: str, fields: dict) -> bytes:
 
 
 @app.get("/", response_class=HTMLResponse)
-def index():
+def dashboard(request: Request):
+    redirect = _require_page_auth(request)
+    if redirect:
+        return redirect
+    with open(DASHBOARD_HTML_PATH, encoding="utf-8") as f:
+        return f.read()
+
+
+@app.get("/documents", response_class=HTMLResponse)
+def documents_page(request: Request):
+    redirect = _require_page_auth(request)
+    if redirect:
+        return redirect
     with open(HTML_PATH, encoding="utf-8") as f:
         return f.read()
 
 
+@app.get("/pension", response_class=HTMLResponse)
+def pension_page(request: Request):
+    redirect = _require_page_auth(request)
+    if redirect:
+        return redirect
+    with open(PENSION_HTML_PATH, encoding="utf-8") as f:
+        return f.read()
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page():
+    with open(LOGIN_HTML_PATH, encoding="utf-8") as f:
+        return f.read().replace("ERROR_PLACEHOLDER", "")
+
+
+@app.post("/login")
+async def login_submit(request: Request):
+    form = await request.form()
+    username = (form.get("username") or "").strip()
+    password = form.get("password") or ""
+
+    expected_user = os.environ.get("DASHBOARD_USERNAME")
+    expected_pass = os.environ.get("DASHBOARD_PASSWORD")
+
+    if expected_user and expected_pass and username == expected_user and password == expected_pass:
+        request.session["authenticated"] = True
+        return RedirectResponse("/", status_code=303)
+
+    with open(LOGIN_HTML_PATH, encoding="utf-8") as f:
+        html = f.read()
+    error_html = '<div class="error">שם משתמש או סיסמה שגויים</div>'
+    return HTMLResponse(html.replace("ERROR_PLACEHOLDER", error_html), status_code=401)
+
+
+@app.get("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login", status_code=303)
+
+
 @app.post("/api/generate")
 async def generate(request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
     payload = await request.json()
     doc_type = payload.get("doc_type")
     fields = payload.get("fields") or {}
@@ -161,6 +257,9 @@ async def generate(request: Request):
 
 @app.post("/api/send-for-signature")
 async def send_for_signature(request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
     payload = await request.json()
     doc_type = payload.get("doc_type")
     fields = payload.get("fields") or {}
@@ -187,6 +286,59 @@ async def send_for_signature(request: Request):
         return Response(f"Error sending for signature: {e}", status_code=500)
 
     return {"status": "sent", "task_guid": result.get("TaskGuid")}
+
+
+@app.get("/api/pension/list")
+def pension_list(request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        return pension_store.list_records()
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error loading pension records: {e}", status_code=500)
+
+
+@app.post("/api/pension/create")
+async def pension_create(request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    fields = await request.json()
+    if not (fields.get("employee_name") or "").strip():
+        return Response("employee_name is required", status_code=400)
+    try:
+        new_id = pension_store.create_record(fields)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error creating pension record: {e}", status_code=500)
+    return {"status": "created", "id": new_id}
+
+
+@app.post("/api/pension/update/{record_id}")
+async def pension_update(record_id: int, request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    fields = await request.json()
+    if not (fields.get("employee_name") or "").strip():
+        return Response("employee_name is required", status_code=400)
+    try:
+        pension_store.update_record(record_id, fields)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error updating pension record: {e}", status_code=500)
+    return {"status": "updated"}
+
+
+@app.post("/api/pension/delete/{record_id}")
+def pension_delete(record_id: int, request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        pension_store.delete_record(record_id)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error deleting pension record: {e}", status_code=500)
+    return {"status": "deleted"}
 
 
 @app.get("/health")

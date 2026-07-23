@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>פנסיה</title>
+<style>
+  :root {
+    --blue-dark: #0b4f8a; --blue: #1e6fb8; --blue-light: #eaf3fb;
+    --border: #d9e6f0; --text: #1c2b39; --red: #d92b2b; --red-light: #fdecec;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
+    background: #f4f8fb; color: var(--text); padding: 22px;
+  }
+  .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+  .top h2 { margin: 0; color: var(--blue-dark); font-size: 19px; }
+  .btn {
+    background: var(--blue); color: #fff; border: none; border-radius: 8px; padding: 9px 16px;
+    font-size: 14px; cursor: pointer; font-weight: 600;
+  }
+  .btn:hover { background: var(--blue-dark); }
+  .btn.secondary { background: #fff; color: var(--blue); border: 1px solid var(--blue); }
+  .btn.danger { background: #fff; color: var(--red); border: 1px solid var(--red); }
+  .cards { display: flex; flex-direction: column; gap: 12px; }
+  .card {
+    background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px;
+  }
+  .card.issue { border-color: var(--red); background: var(--red-light); }
+  .card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .card-title { font-weight: 700; font-size: 15.5px; }
+  .card-sub { color: #5b7186; font-size: 13px; margin-top: 2px; }
+  .issue-badge {
+    background: var(--red); color: #fff; font-size: 12px; padding: 3px 10px; border-radius: 20px;
+    font-weight: 600; white-space: nowrap;
+  }
+  .card-body { margin-top: 10px; font-size: 13.5px; line-height: 1.9; }
+  .card-body .row { display: flex; gap: 6px; }
+  .card-body .label { color: #5b7186; min-width: 90px; }
+  .pw-wrap { display: inline-flex; align-items: center; gap: 6px; }
+  .pw-wrap button { border: none; background: none; cursor: pointer; color: var(--blue); font-size: 12.5px; }
+  .card-actions { margin-top: 12px; display: flex; gap: 8px; }
+  .empty { text-align: center; color: #5b7186; padding: 60px 20px; }
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(11,79,138,0.35);
+    align-items: center; justify-content: center; z-index: 10;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: #fff; border-radius: 12px; padding: 24px; width: 420px; max-width: 92vw;
+    max-height: 88vh; overflow-y: auto;
+  }
+  .modal h3 { margin: 0 0 16px; color: var(--blue-dark); }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 13px; color: #5b7186; margin-bottom: 4px; }
+  .field input[type=text], .field input[type=password], .field textarea {
+    width: 100%; padding: 9px 10px; border: 1px solid var(--border); border-radius: 7px;
+    font-size: 14px; font-family: inherit; outline: none;
+  }
+  .field textarea { resize: vertical; min-height: 50px; }
+  .field.checkbox { display: flex; align-items: center; gap: 8px; }
+  .field.checkbox input { width: auto; }
+  .modal-actions { display: flex; gap: 8px; margin-top: 18px; justify-content: flex-end; }
+  .error-msg { color: var(--red); font-size: 13px; margin-bottom: 10px; }
+  #issueDescWrap { display: none; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <h2>🏦 פנסיה</h2>
+    <button class="btn" onclick="openModal()">+ הוסף רשומה</button>
+  </div>
+  <div id="cards" class="cards"></div>
+  <div id="emptyMsg" class="empty" style="display:none">אין עדיין רשומות. לחצי על "הוסף רשומה" כדי להתחיל.</div>
+
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal">
+      <h3 id="modalTitle">רשומה חדשה</h3>
+      <div id="modalError" class="error-msg" style="display:none"></div>
+      <input type="hidden" id="recordId">
+      <div class="field"><label>שם העובד/ת</label><input type="text" id="employee_name"></div>
+      <div class="field"><label>חברה</label><input type="text" id="company_name"></div>
+      <div class="field"><label>קרן פנסיה</label><input type="text" id="fund_name"></div>
+      <div class="field"><label>קישור לדיווח / אתר הקרן</label><input type="text" id="portal_url" placeholder="https://..."></div>
+      <div class="field"><label>שם משתמש באתר</label><input type="text" id="portal_username"></div>
+      <div class="field"><label>סיסמה באתר</label><input type="password" id="portal_password" placeholder="השאירי ריק כדי לא לשנות"></div>
+      <div class="field"><label>הערות</label><textarea id="notes"></textarea></div>
+      <div class="field checkbox">
+        <input type="checkbox" id="has_issue" onchange="document.getElementById('issueDescWrap').style.display = this.checked ? 'block' : 'none'">
+        <label style="margin:0" for="has_issue">יש בעיה / חוב שצריך לטפל בו</label>
+      </div>
+      <div class="field" id="issueDescWrap"><label>תיאור הבעיה / תזכורת</label><textarea id="issue_description"></textarea></div>
+      <div class="modal-actions">
+        <button class="btn secondary" onclick="closeModal()">ביטול</button>
+        <button class="btn" onclick="saveRecord()">שמירה</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+async function loadRecords() {
+  const res = await fetch("/api/pension/list");
+  if (!res.ok) {
+    document.getElementById("cards").innerHTML = "";
+    document.getElementById("emptyMsg").style.display = "block";
+    document.getElementById("emptyMsg").textContent = "שגיאה בטעינת הנתונים: " + (await res.text());
+    return;
+  }
+  const records = await res.json();
+  const cardsEl = document.getElementById("cards");
+  cardsEl.innerHTML = "";
+  document.getElementById("emptyMsg").style.display = records.length ? "none" : "block";
+
+  records.forEach(r => {
+    const div = document.createElement("div");
+    div.className = "card" + (r.has_issue ? " issue" : "");
+    div.innerHTML = `
+      <div class="card-top">
+        <div>
+          <div class="card-title">${escapeHtml(r.employee_name || "")}</div>
+          <div class="card-sub">${escapeHtml(r.company_name || "")} ${r.fund_name ? "· " + escapeHtml(r.fund_name) : ""}</div>
+        </div>
+        ${r.has_issue ? '<span class="issue-badge">⚠️ דורש טיפול</span>' : ""}
+      </div>
+      <div class="card-body">
+        ${r.portal_url ? `<div class="row"><span class="label">קישור:</span><a href="${escapeHtml(r.portal_url)}" target="_blank">${escapeHtml(r.portal_url)}</a></div>` : ""}
+        ${r.portal_username ? `<div class="row"><span class="label">משתמש:</span><span>${escapeHtml(r.portal_username)}</span></div>` : ""}
+        ${r.portal_password ? `<div class="row"><span class="label">סיסמה:</span><span class="pw-wrap"><span class="pw-val" data-pw="${escapeHtml(r.portal_password)}">••••••••</span><button onclick="togglePw(this)">הצג</button></span></div>` : ""}
+        ${r.notes ? `<div class="row"><span class="label">הערות:</span><span>${escapeHtml(r.notes)}</span></div>` : ""}
+        ${r.has_issue && r.issue_description ? `<div class="row"><span class="label">בעיה:</span><span>${escapeHtml(r.issue_description)}</span></div>` : ""}
+      </div>
+      <div class="card-actions">
+        <button class="btn secondary" onclick='editRecord(${JSON.stringify(r)})'>עריכה</button>
+        <button class="btn danger" onclick="deleteRecord(${r.id})">מחיקה</button>
+      </div>
+    `;
+    cardsEl.appendChild(div);
+  });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function togglePw(btn) {
+  const span = btn.previousElementSibling;
+  if (span.textContent === "••••••••") {
+    span.textContent = span.dataset.pw;
+    btn.textContent = "הסתר";
+  } else {
+    span.textContent = "••••••••";
+    btn.textContent = "הצג";
+  }
+}
+
+function openModal() {
+  document.getElementById("modalTitle").textContent = "רשומה חדשה";
+  document.getElementById("modalError").style.display = "none";
+  ["recordId","employee_name","company_name","fund_name","portal_url","portal_username","portal_password","notes","issue_description"]
+    .forEach(id => document.getElementById(id).value = "");
+  document.getElementById("has_issue").checked = false;
+  document.getElementById("issueDescWrap").style.display = "none";
+  document.getElementById("modalOverlay").classList.add("open");
+}
+
+function editRecord(r) {
+  document.getElementById("modalTitle").textContent = "עריכת רשומה";
+  document.getElementById("modalError").style.display = "none";
+  document.getElementById("recordId").value = r.id;
+  document.getElementById("employee_name").value = r.employee_name || "";
+  document.getElementById("company_name").value = r.company_name || "";
+  document.getElementById("fund_name").value = r.fund_name || "";
+  document.getElementById("portal_url").value = r.portal_url || "";
+  document.getElementById("portal_username").value = r.portal_username || "";
+  document.getElementById("portal_password").value = "";
+  document.getElementById("notes").value = r.notes || "";
+  document.getElementById("has_issue").checked = !!r.has_issue;
+  document.getElementById("issue_description").value = r.issue_description || "";
+  document.getElementById("issueDescWrap").style.display = r.has_issue ? "block" : "none";
+  document.getElementById("modalOverlay").classList.add("open");
+}
+
+function closeModal() {
+  document.getElementById("modalOverlay").classList.remove("open");
+}
+
+async function saveRecord() {
+  const id = document.getElementById("recordId").value;
+  const payload = {
+    employee_name: document.getElementById("employee_name").value.trim(),
+    company_name: document.getElementById("company_name").value.trim(),
+    fund_name: document.getElementById("fund_name").value.trim(),
+    portal_url: document.getElementById("portal_url").value.trim(),
+    portal_username: document.getElementById("portal_username").value.trim(),
+    portal_password: document.getElementById("portal_password").value,
+    notes: document.getElementById("notes").value.trim(),
+    has_issue: document.getElementById("has_issue").checked,
+    issue_description: document.getElementById("issue_description").value.trim(),
+  };
+  if (!payload.employee_name) {
+    const errEl = document.getElementById("modalError");
+    errEl.textContent = "יש להזין שם עובד/ת";
+    errEl.style.display = "block";
+    return;
+  }
+  const url = id ? `/api/pension/update/${id}` : "/api/pension/create";
+  const res = await fetch(url, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const errEl = document.getElementById("modalError");
+    errEl.textContent = "שגיאה בשמירה: " + (await res.text());
+    errEl.style.display = "block";
+    return;
+  }
+  closeModal();
+  loadRecords();
+}
+
+async function deleteRecord(id) {
+  if (!confirm("למחוק את הרשומה?")) return;
+  const res = await fetch(`/api/pension/delete/${id}`, { method: "POST" });
+  if (!res.ok) {
+    alert("שגיאה במחיקה: " + (await res.text()));
+    return;
+  }
+  loadRecords();
+}
+
+loadRecords();
+</script>
+</body>
+</html>
