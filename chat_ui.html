@@ -5,65 +5,74 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ביורוקרטיה סיטי וואש</title>
 <style>
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; font-family: -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
-    background: #e5ddd5; height: 100vh; display: flex; align-items: center; justify-content: center;
+  :root {
+    --blue-dark: #0b4f8a; --blue: #1e6fb8; --blue-light: #eaf3fb;
+    --border: #d9e6f0; --text: #1c2b39;
   }
-  .phone {
-    width: 420px; max-width: 100vw; height: 100vh; max-height: 820px;
-    background: #e5ddd5; display: flex; flex-direction: column;
-    box-shadow: 0 0 20px rgba(0,0,0,0.3); border-radius: 8px; overflow: hidden;
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; font-family: -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
+    background: #f4f8fb;
+  }
+  .chat-wrap {
+    width: 100%; height: 100vh; display: flex; flex-direction: column; background: #f4f8fb;
   }
   .header {
-    background: #075E54; color: white; padding: 14px 16px;
-    display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+    background: linear-gradient(135deg, var(--blue-dark), var(--blue));
+    color: #fff; padding: 16px 22px;
+    display: flex; align-items: center; gap: 12px; flex-shrink: 0;
   }
   .avatar {
-    width: 38px; height: 38px; border-radius: 50%; background: #128C7E;
+    width: 38px; height: 38px; border-radius: 50%; background: rgba(255,255,255,0.18);
     display: flex; align-items: center; justify-content: center; font-size: 18px;
   }
-  .header-text .name { font-weight: 600; font-size: 16px; }
-  .header-text .status { font-size: 12px; opacity: 0.8; }
+  .header-text .name { font-weight: 700; font-size: 18px; }
+  .header-text .status { font-size: 14px; opacity: 0.85; }
   .messages {
-    flex: 1; overflow-y: auto; padding: 16px 10px; display: flex; flex-direction: column; gap: 6px;
+    flex: 1; overflow-y: auto; padding: 20px 16%; display: flex; flex-direction: column; gap: 8px;
   }
   .bubble {
-    max-width: 78%; padding: 8px 12px; border-radius: 8px; font-size: 14.5px; line-height: 1.5;
-    white-space: pre-wrap; box-shadow: 0 1px 1px rgba(0,0,0,0.1); animation: pop .15s ease-out;
+    max-width: 68%; padding: 12px 16px; border-radius: 10px; font-size: 17px; line-height: 1.55;
+    white-space: pre-wrap; animation: pop .15s ease-out;
   }
-  @keyframes pop { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-  .bot { align-self: flex-start; background: #fff; border-top-right-radius: 2px; }
-  .user { align-self: flex-end; background: #dcf8c6; border-top-left-radius: 2px; }
-  .hint { align-self: flex-start; color: #667781; font-size: 12px; padding: 0 12px; max-width: 78%; }
+  @keyframes pop { from { transform: scale(0.96); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .bot { align-self: flex-start; background: #fff; border: 1px solid var(--border); color: var(--text); }
+  .user { align-self: flex-end; background: var(--blue); color: #fff; }
+  .hint { align-self: flex-start; color: #5b7186; font-size: 13.5px; padding: 0 14px; max-width: 68%; }
   .quick-replies { display: flex; gap: 8px; flex-wrap: wrap; align-self: flex-end; justify-content: flex-end; margin: 4px 0; max-width: 90%; }
   .quick-replies button {
-    background: white; border: 1px solid #128C7E; color: #075E54; border-radius: 16px;
-    padding: 7px 14px; font-size: 13.5px; cursor: pointer;
+    background: #fff; border: 1px solid var(--blue); color: var(--blue-dark); border-radius: 16px;
+    padding: 8px 16px; font-size: 15px; cursor: pointer; font-weight: 600;
   }
-  .quick-replies button:hover { background: #f0f0f0; }
+  .quick-replies button:hover { background: var(--blue-light); }
   .input-row {
-    flex-shrink: 0; display: flex; gap: 8px; padding: 10px; background: #f0f0f0;
+    flex-shrink: 0; display: flex; gap: 10px; padding: 14px 16%; background: #fff; border-top: 1px solid var(--border);
   }
   .input-row input[type=text] {
-    flex: 1; border: none; border-radius: 20px; padding: 10px 16px; font-size: 14.5px; outline: none;
+    flex: 1; border: 1px solid var(--border); border-radius: 20px; padding: 11px 18px; font-size: 16px; outline: none;
   }
+  .input-row input[type=text]:focus { border-color: var(--blue); }
   .input-row button {
-    background: #075E54; color: white; border: none; border-radius: 50%;
-    width: 40px; height: 40px; font-size: 16px; cursor: pointer; flex-shrink: 0;
+    background: var(--blue); color: white; border: none; border-radius: 50%;
+    width: 42px; height: 42px; font-size: 17px; cursor: pointer; flex-shrink: 0;
   }
+  .input-row button:hover { background: var(--blue-dark); }
   .input-row button:disabled { opacity: 0.4; cursor: default; }
   .download-btn {
-    align-self: flex-start; background: #128C7E; color: white; text-decoration: none;
-    padding: 10px 16px; border-radius: 8px; font-size: 14px; display: inline-block; margin-top: 4px;
+    align-self: flex-start; background: var(--blue); color: white; text-decoration: none;
+    padding: 11px 18px; border-radius: 8px; font-size: 16px; display: inline-block; margin-top: 4px; font-weight: 600;
   }
-  .typing { align-self: flex-start; color: #667781; font-size: 13px; padding: 4px 12px; }
+  .download-btn:hover { background: var(--blue-dark); }
+  .typing { align-self: flex-start; color: #5b7186; font-size: 14px; padding: 4px 14px; }
+  @media (max-width: 900px) {
+    .messages, .input-row { padding-left: 5%; padding-right: 5%; }
+  }
 </style>
 </head>
 <body>
-<div class="phone">
+<div class="chat-wrap">
   <div class="header">
-    <div class="avatar">🧽</div>
+    <div class="avatar">📁</div>
     <div class="header-text">
       <div class="name">ביורוקרטיה סיטי וואש</div>
       <div class="status">בוט ליצירת מסמכי כוח אדם</div>
@@ -260,7 +269,7 @@ function botSay(text, delay=400) {
 
 async function start() {
   inputRow.style.display = "none";
-  await botSay("שלום! כאן ביורוקרטיה סיטי וואש 🧽 קודם כל, איזו חברה?", 300);
+  await botSay("שלום! כאן ביורוקרטיה סיטי וואש 📁 קודם כל, איזו חברה?", 300);
   const options = COMPANIES.map(c => [c.name, c]);
   addQuickReplies(options, (label, company) => {
     data.COMPANY_NAME = company.name;
