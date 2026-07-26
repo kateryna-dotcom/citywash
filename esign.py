@@ -19,7 +19,13 @@ import os
 import requests
 
 BASE_URL = "https://app.2sign.co.il"
-SIGNATURE_MARKER = "§"
+# 2Sign's docs: "the system will automatically place a signature field
+# wherever it finds it, preserving the character's size and position" --
+# so the signature box size is driven by the marker's own font size in the
+# document. It was 1pt (invisible but also a tiny signature box); templates
+# now use a 24pt, 6-character-wide marker (still invisible: white text) so
+# the resulting signature box is a normal, usable size.
+SIGNATURE_MARKER = "§§§§§§"
 
 
 def _unwrap(data: dict) -> dict:
