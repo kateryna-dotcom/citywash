@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>מלאי</title>
+<style>
+  :root {
+    --blue-dark: #0b4f8a; --blue: #1e6fb8; --blue-light: #eaf3fb;
+    --border: #d9e6f0; --text: #1c2b39; --red: #d92b2b; --red-light: #fdecec;
+    --green: #1a8a4a; --green-light: #eaf9f0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
+    background: #f4f8fb; color: var(--text); padding: 22px;
+  }
+  .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; flex-wrap: wrap; gap: 12px; }
+  .top h2 { margin: 0; color: var(--blue-dark); font-size: 19px; }
+  .top-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  select {
+    padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
+    font-size: 14px; font-family: inherit; background: #fff;
+  }
+  .btn {
+    background: var(--blue); color: #fff; border: none; border-radius: 8px; padding: 9px 16px;
+    font-size: 14px; cursor: pointer; font-weight: 600;
+  }
+  .btn:hover { background: var(--blue-dark); }
+  .btn.secondary { background: #fff; color: var(--blue); border: 1px solid var(--blue); }
+  .btn.small { padding: 6px 12px; font-size: 13px; }
+  .status-msg { font-size: 13px; color: #5b7186; margin-inline-start: 4px; }
+  .cards { display: flex; flex-direction: column; gap: 12px; }
+  .card {
+    background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px;
+  }
+  .card.needs-review { border-color: var(--red); background: var(--red-light); }
+  .card.ok { border-color: var(--green); }
+  .card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; cursor: pointer; }
+  .card-title-wrap { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .dot.red { background: var(--red); }
+  .dot.green { background: var(--green); }
+  .card-title { font-weight: 700; font-size: 15px; }
+  .card-sub { color: #5b7186; font-size: 13px; margin-top: 3px; }
+  .badge { font-size: 12px; padding: 3px 10px; border-radius: 20px; font-weight: 600; white-space: nowrap; }
+  .badge.needs-review { background: var(--red); color: #fff; }
+  .badge.ok { background: var(--green); color: #fff; }
+  .badge.no-pdf { background: #999; color: #fff; }
+  .raw-text {
+    display: none; margin-top: 12px; background: #f8fafc; border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px; font-size: 12.5px; white-space: pre-wrap;
+    max-height: 320px; overflow-y: auto; direction: ltr; text-align: left; font-family: monospace;
+  }
+  .raw-text.open { display: block; }
+  .card-actions { margin-top: 10px; display: flex; gap: 8px; }
+  .empty { text-align: center; color: #5b7186; padding: 60px 20px; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <h2>📦 מלאי — חשבוניות ספקים</h2>
+    <div class="top-controls">
+      <select id="branchFilter" onchange="loadRecords()">
+        <option value="">כל הסניפים</option>
+      </select>
+      <button class="btn secondary" onclick="checkNow()">🔄 בדוק עכשיו</button>
+      <span id="statusMsg" class="status-msg"></span>
+    </div>
+  </div>
+  <div id="cards" class="cards"></div>
+  <div id="emptyMsg" class="empty" style="display:none">אין עדיין חשבוניות. לחצי על "בדוק עכשיו" כדי לבדוק את המייל.</div>
+
+<script>
+async function loadBranches() {
+  const res = await fetch("/api/inventory/branches");
+  if (!res.ok) return;
+  const branches = await res.json();
+  const sel = document.getElementById("branchFilter");
+  const current = sel.value;
+  sel.innerHTML = '<option value="">כל הסניפים</option>' +
+    branches.map(b => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join("");
+  sel.value = current;
+}
+
+async function loadRecords() {
+  const branch = document.getElementById("branchFilter").value;
+  const url = branch ? `/api/inventory/list?branch=${encodeURIComponent(branch)}` : "/api/inventory/list";
+  const res = await fetch(url);
+  const cardsEl = document.getElementById("cards");
+  if (!res.ok) {
+    cardsEl.innerHTML = "";
+    document.getElementById("emptyMsg").style.display = "block";
+    document.getElementById("emptyMsg").textContent = "שגיאה בטעינה: " + (await res.text());
+    return;
+  }
+  const records = await res.json();
+  cardsEl.innerHTML = "";
+  document.getElementById("emptyMsg").style.display = records.length ? "none" : "block";
+
+  records.forEach(r => {
+    const isReview = r.status === "needs_review" || r.status === "no_pdf_found";
+    const cls = isReview ? "needs-review" : (r.status === "ok" ? "ok" : "");
+    const dotCls = isReview ? "red" : "green";
+    const badgeLabel = r.status === "needs_review" ? "לבדוק"
+      : r.status === "no_pdf_found" ? "אין PDF"
+      : r.status === "ok" ? "בוצע" : r.status;
+    const div = document.createElement("div");
+    div.className = "card " + cls;
+    const received = r.received_at ? new Date(r.received_at).toLocaleString("he-IL") : "";
+    div.innerHTML = `
+      <div class="card-top" onclick="toggleRaw(${r.id})">
+        <div class="card-title-wrap">
+          <span class="dot ${dotCls}"></span>
+          <div>
+            <div class="card-title">${escapeHtml(r.subject || "(ללא נושא)")}</div>
+            <div class="card-sub">${escapeHtml(r.sender_email || "")} · ${escapeHtml(received)}
+              ${r.branch ? " · סניף: " + escapeHtml(r.branch) : ""}
+              ${r.invoice_number ? " · מס' חשבונית: " + escapeHtml(r.invoice_number) : ""}
+            </div>
+          </div>
+        </div>
+        <span class="badge ${isReview ? 'needs-review' : (r.status === 'ok' ? 'ok' : 'no-pdf')}">${escapeHtml(badgeLabel)}</span>
+      </div>
+      <div class="raw-text" id="raw-${r.id}">${escapeHtml(r.raw_text || "(אין טקסט)")}</div>
+      <div class="card-actions">
+        ${isReview ? `<button class="btn small" onclick="markOk(${r.id})">✓ סימנתי כטופל</button>` : ""}
+      </div>
+    `;
+    cardsEl.appendChild(div);
+  });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function toggleRaw(id) {
+  document.getElementById(`raw-${id}`).classList.toggle("open");
+}
+
+async function markOk(id) {
+  const res = await fetch(`/api/inventory/mark/${id}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "ok" }),
+  });
+  if (res.ok) loadRecords();
+}
+
+async function checkNow() {
+  const statusEl = document.getElementById("statusMsg");
+  statusEl.textContent = "בודק...";
+  const res = await fetch("/api/inventory/check-now", { method: "POST" });
+  if (!res.ok) {
+    statusEl.textContent = "שגיאה: " + (await res.text());
+    return;
+  }
+  const result = await res.json();
+  statusEl.textContent = `נמצאו ${result.created} חדשות (${result.skipped} כבר נבדקו)`;
+  await loadBranches();
+  await loadRecords();
+}
+
+loadBranches();
+loadRecords();
+</script>
+</body>
+</html>
