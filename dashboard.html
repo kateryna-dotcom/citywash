@@ -68,6 +68,7 @@
     <div class="nav-item active" data-pane="documents"><span class="emoji">📄</span><span>בירוקרטיה</span></div>
     <div class="nav-item" data-pane="salary"><span class="emoji">💰</span><span>שכר</span></div>
     <div class="nav-item" data-pane="pension"><span class="emoji">🏦</span><span>פנסיה</span></div>
+    <div class="nav-item" data-pane="inventory"><span class="emoji">📦</span><span>מלאי</span></div>
     <div class="sidebar-footer">Express City Wash<br><a href="/logout">התנתקות</a></div>
   </div>
   <div class="main">
@@ -85,11 +86,12 @@
         </div>
       </div>
       <div class="pane" id="pane-pension"><iframe src="/pension" title="pension"></iframe></div>
+      <div class="pane" id="pane-inventory"><iframe src="/inventory" title="inventory"></iframe></div>
     </div>
   </div>
 </div>
 <script>
-const titles = { documents: "בירוקרטיה סיטי וואש", salary: "שכר", pension: "פנסיה" };
+const titles = { documents: "בירוקרטיה סיטי וואש", salary: "שכר", pension: "פנסיה", inventory: "מלאי" };
 document.querySelectorAll(".nav-item").forEach(item => {
   item.addEventListener("click", () => {
     document.querySelectorAll(".nav-item").forEach(i => i.classList.remove("active"));
