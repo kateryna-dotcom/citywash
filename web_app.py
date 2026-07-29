@@ -17,6 +17,8 @@ Requires LibreOffice on the host for the docx -> pdf conversion (see Dockerfile)
 """
 import os
 import re
+import threading
+import time
 from urllib.parse import quote
 
 from fastapi import FastAPI, Request
@@ -34,6 +36,8 @@ from contract_filler import (
 )
 from esign import send_for_sms_signature
 import pension_store
+import invoice_store
+import invoice_ingest
 
 # doc_type keys that support the "send for SMS signature" option -- each of
 # these templates has an invisible marker (§) placed at the signature spot.
@@ -51,6 +55,23 @@ HTML_PATH = os.path.join(BASE_DIR, "chat_ui.html")
 DASHBOARD_HTML_PATH = os.path.join(BASE_DIR, "dashboard.html")
 LOGIN_HTML_PATH = os.path.join(BASE_DIR, "login.html")
 PENSION_HTML_PATH = os.path.join(BASE_DIR, "pension.html")
+INVENTORY_HTML_PATH = os.path.join(BASE_DIR, "inventory.html")
+
+# How often the background thread checks Gmail for new supplier invoices.
+INVOICE_POLL_INTERVAL_SECONDS = 15 * 60
+
+
+def _invoice_poll_loop():
+    while True:
+        try:
+            result = invoice_ingest.process_new_invoices()
+            if result.get("created"):
+                print(f"[invoice-poll] created={result['created']} skipped={result['skipped']}")
+            if result.get("errors"):
+                print(f"[invoice-poll] errors={result['errors']}")
+        except Exception as e:  # noqa: BLE001
+            print(f"[invoice-poll] skipped this cycle: {e}")
+        time.sleep(INVOICE_POLL_INTERVAL_SECONDS)
 
 
 @app.on_event("startup")
@@ -63,6 +84,16 @@ def _startup():
         pension_store.init_db()
     except Exception as e:  # noqa: BLE001
         print(f"[startup] pension_store.init_db() skipped: {e}")
+
+    try:
+        invoice_store.init_db()
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] invoice_store.init_db() skipped: {e}")
+
+    # Background polling for new supplier invoices -- runs regardless of
+    # whether anyone has the dashboard open. If GMAIL_* env vars aren't set
+    # yet, each cycle just logs and retries later instead of crashing.
+    threading.Thread(target=_invoice_poll_loop, daemon=True).start()
 
 
 def _is_authenticated(request: Request) -> bool:
@@ -185,6 +216,15 @@ def pension_page(request: Request):
     if redirect:
         return redirect
     with open(PENSION_HTML_PATH, encoding="utf-8") as f:
+        return f.read()
+
+
+@app.get("/inventory", response_class=HTMLResponse)
+def inventory_page(request: Request):
+    redirect = _require_page_auth(request)
+    if redirect:
+        return redirect
+    with open(INVENTORY_HTML_PATH, encoding="utf-8") as f:
         return f.read()
 
 
@@ -339,6 +379,54 @@ def pension_delete(record_id: int, request: Request):
     except Exception as e:  # noqa: BLE001
         return Response(f"Error deleting pension record: {e}", status_code=500)
     return {"status": "deleted"}
+
+
+@app.get("/api/inventory/list")
+def inventory_list(request: Request, branch: str = None):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        return invoice_store.list_records(branch=branch)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error loading invoice records: {e}", status_code=500)
+
+
+@app.get("/api/inventory/branches")
+def inventory_branches(request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        return invoice_store.list_branches()
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error loading branches: {e}", status_code=500)
+
+
+@app.post("/api/inventory/check-now")
+def inventory_check_now(request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        return invoice_ingest.process_new_invoices()
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error checking for new invoices: {e}", status_code=500)
+
+
+@app.post("/api/inventory/mark/{record_id}")
+async def inventory_mark(record_id: int, request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    payload = await request.json()
+    status = payload.get("status", "ok")
+    note = payload.get("note")
+    try:
+        invoice_store.update_status(record_id, status, note)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error updating record: {e}", status_code=500)
+    return {"status": "updated"}
 
 
 @app.get("/health")
