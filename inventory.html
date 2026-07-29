@@ -53,6 +53,12 @@
     max-height: 320px; overflow-y: auto; direction: ltr; text-align: left; font-family: monospace;
   }
   .raw-text.open { display: block; }
+  .toggle-raw { background: none; border: none; color: var(--blue); font-size: 12px; cursor: pointer; padding: 0; margin-top: 8px; }
+  .items-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+  .items-table th { text-align: right; color: #5b7186; font-weight: 600; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+  .items-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
+  .items-table tr.low-confidence td { background: var(--red-light); }
+  .items-table .num { direction: ltr; text-align: left; }
   .card-actions { margin-top: 10px; display: flex; gap: 8px; }
   .empty { text-align: center; color: #5b7186; padding: 60px 20px; }
 </style>
@@ -108,10 +114,33 @@ async function loadRecords() {
     const div = document.createElement("div");
     div.className = "card " + cls;
     const received = r.received_at ? new Date(r.received_at).toLocaleString("he-IL") : "";
+    const items = r.line_items || [];
+    const anyLowConf = items.some(it => it.confident === false && !it.resolved);
+    const itemsTable = items.length ? `
+      <table class="items-table">
+        <thead><tr><th></th><th>פריט / ברקוד</th><th>תיאור</th><th>כמות</th><th>מחיר יח'</th><th>סה"כ</th><th></th></tr></thead>
+        <tbody>
+          ${items.map((it, idx) => {
+            const flagged = it.confident === false && !it.resolved;
+            return `
+            <tr class="${flagged ? 'low-confidence' : ''}">
+              <td>${flagged ? '🔴' : '🟢'}</td>
+              <td class="num">${escapeHtml(it.sku ?? it.barcode ?? "")}</td>
+              <td>${escapeHtml(it.description || "")}</td>
+              <td class="num">${it.quantity ?? ""}</td>
+              <td class="num">${it.unit_price ?? ""}</td>
+              <td class="num">${it.total ?? ""}</td>
+              <td>${flagged ? `<button class="toggle-raw" onclick="event.stopPropagation(); resolveItem(${r.id}, ${idx})">✓ תיקנתי</button>` : ""}</td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table>
+      ${anyLowConf ? `<div style="margin-top:6px;color:var(--red);font-size:12.5px;">🔴 = הסכום (כמות × מחיר) לא תואם את הסכום בחשבונית — הפריט עדיין יוזן, בדוק/י את הסכום ולחצ/י "תיקנתי".</div>` : ""}
+      ` : `<div style="margin-top:8px;color:#5b7186;font-size:13px;">לא זוהו פריטים אוטומטית — ראה/י טקסט מקורי.</div>`;
     div.innerHTML = `
       <div class="card-top" onclick="toggleRaw(${r.id})">
         <div class="card-title-wrap">
-          <span class="dot ${dotCls}"></span>
+          <span class="dot ${anyLowConf ? 'red' : dotCls}"></span>
           <div>
             <div class="card-title">${escapeHtml(r.subject || "(ללא נושא)")}</div>
             <div class="card-sub">${escapeHtml(r.sender_email || "")} · ${escapeHtml(received)}
@@ -122,6 +151,8 @@ async function loadRecords() {
         </div>
         <span class="badge ${isReview ? 'needs-review' : (r.status === 'ok' ? 'ok' : 'no-pdf')}">${escapeHtml(badgeLabel)}</span>
       </div>
+      ${itemsTable}
+      <button class="toggle-raw" onclick="event.stopPropagation(); toggleRaw(${r.id})">הצג/הסתר טקסט מקורי</button>
       <div class="raw-text" id="raw-${r.id}">${escapeHtml(r.raw_text || "(אין טקסט)")}</div>
       <div class="card-actions">
         ${isReview ? `<button class="btn small" onclick="markOk(${r.id})">✓ סימנתי כטופל</button>` : ""}
@@ -137,6 +168,13 @@ function escapeHtml(s) {
 
 function toggleRaw(id) {
   document.getElementById(`raw-${id}`).classList.toggle("open");
+}
+
+async function resolveItem(recordId, itemIndex) {
+  const res = await fetch(`/api/inventory/resolve-item/${recordId}/${itemIndex}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ resolved: true }),
+  });
+  if (res.ok) loadRecords();
 }
 
 async function markOk(id) {
