@@ -344,10 +344,14 @@ function handleSingleAnswer(key, displayText, storedValue) {
 // Accepts either "value1, value2, value3" in one message, or one value per
 // message sent in order — whichever the person finds more natural.
 function splitGroupAnswer(raw) {
-  const stripNumbering = s => s.replace(/^\s*\d+[.)]\s*/, "").trim();
-  let lines = raw.split("\n").map(stripNumbering).filter(x => x.length > 0);
-  if (lines.length > 1) return lines;
-  return raw.split(SEP).map(stripNumbering).filter(x => x.length > 0);
+  // Numbering markers like "1. " / "2) " only make sense when the person
+  // typed each answer on its own line -- strip those. When everything is
+  // on one line separated by commas, don't strip leading "21." / "20." at
+  // all: that's not list numbering, it's the day of a date like 21.07.26.
+  const stripNumbering = s => s.replace(/^\s*\d+[.)]\s+/, "").trim();
+  let lines = raw.split("\n").map(s => s.trim()).filter(x => x.length > 0);
+  if (lines.length > 1) return lines.map(stripNumbering);
+  return raw.split(SEP).map(s => s.trim()).filter(x => x.length > 0);
 }
 
 async function handleGroupAnswer(rawText) {
