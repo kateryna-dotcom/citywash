@@ -109,6 +109,27 @@ def list_branches() -> list:
             return [r[0] for r in cur.fetchall()]
 
 
+def update_line_item(record_id: int, item_index: int, updates: dict):
+    """Merges `updates` into line_items[item_index] for one invoice record
+    (used e.g. to mark a low-confidence / price-mismatch item as resolved
+    once Kateryna has fixed or confirmed it)."""
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT line_items FROM invoice_records WHERE id=%s", (record_id,))
+            row = cur.fetchone()
+            if not row or not row["line_items"]:
+                return
+            items = row["line_items"]
+            if item_index < 0 or item_index >= len(items):
+                return
+            items[item_index].update(updates)
+            cur.execute(
+                "UPDATE invoice_records SET line_items=%s, updated_at=now() WHERE id=%s",
+                (psycopg2.extras.Json(items), record_id),
+            )
+        conn.commit()
+
+
 def update_status(record_id: int, status: str, note: str = None):
     with _get_conn() as conn:
         with conn.cursor() as cur:
