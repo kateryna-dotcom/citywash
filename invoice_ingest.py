@@ -1,17 +1,16 @@
 """
 Ties gmail_client + invoice_store together: finds new supplier invoice
-emails, downloads the PDF, extracts its text, does a first best-effort pass
-at pulling out the branch name / invoice number, and stores everything in
-Postgres for review on the מלАי dashboard tab.
+emails, downloads the PDF, extracts its text, parses out the branch name,
+invoice number, and line items (product, quantity, price), and stores
+everything in Postgres for review on the מלАי dashboard tab.
 
-NOTE on line items (products + quantities): real per-supplier parsing
-(matching product names/barcodes and quantities from the PDF layout) needs
-to be tuned against the ACTUAL extracted text of each supplier's invoice
-format, which we don't have yet. Until that's tuned, every new invoice is
-stored with its full raw_text and status='needs_review' so nothing is
-silently mis-entered -- Kateryna can see exactly what the PDF said. Once we
-see real examples we'll add supplier-specific line-item extraction and
-flip matched invoices to an auto-filled state.
+Per-supplier line-item parsing was built from real sample invoices
+Kateryna provided (2 per supplier). Formats are consistent within a
+supplier but may have edge cases we haven't seen yet, so every parsed item
+carries a `confident` flag (quantity * unit_price reconciles with the
+printed line total or not) and every invoice still keeps its full
+raw_text -- nothing is silently mis-entered into Cash On Tab from this
+step alone; Kateryna reviews on the dashboard before anything is entered.
 """
 import io
 import re
@@ -32,6 +31,192 @@ _BRANCH_SUBJECT_RE = re.compile(r"לסניף\s+(.+)$")
 _INVOICE_NUMBER_RE = re.compile(
     r"(?:חשבונית\s*מס'?|מספר\s*תעודה|תעודה\s*מס'?)\s*[:\-]?\s*([A-Za-z0-9\-]+)"
 )
+
+_HEBREW_CHAR_RE = re.compile(r"[֐-׿]")
+
+
+def _num(s):
+    try:
+        return float(str(s).replace(",", ""))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Per-supplier line-item parsers.
+# ---------------------------------------------------------------------------
+
+# emi-1.com ("אי.אמ.איי מערכות שטיפה לרכב"): one line per item --
+# "<total> ש"ח<unit_price> יח<qty> [unit/extra][description][SKU] <row#>"
+_EMI_ROW_RE = re.compile(
+    r'(?P<total>[\d,]+\.\d{2})\s*ש"ח'
+    r'(?P<unit_price>[\d,]+\.\d{2})\s*יח'
+    r'(?P<qty>[\d,]+\.\d{2})\s*'
+    r'(?P<middle>.*?)'
+    r'(?P<sku>[A-Za-z]{1,3}\d{5,})\s+(?P<row_num>\d+)\s*$',
+    re.MULTILINE,
+)
+
+
+def parse_emi(text: str) -> list:
+    items = []
+    for m in _EMI_ROW_RE.finditer(text):
+        middle = m.group("middle")
+        hm = _HEBREW_CHAR_RE.search(middle)
+        desc = middle[hm.start():].strip() if hm else middle.strip()
+        qty, unit_price, total = _num(m.group("qty")), _num(m.group("unit_price")), _num(m.group("total"))
+        confident = None not in (qty, unit_price, total) and abs(round(qty * unit_price, 2) - total) < 0.5
+        items.append({
+            "sku": m.group("sku"), "description": desc, "quantity": qty,
+            "unit_price": unit_price, "total": total, "confident": confident,
+        })
+    return items
+
+
+# moshaev-inv.com ("מושייב השקעות" / חשבשבת "HashDoc" PDFs -- also used by
+# oz-b-g.com "עוז בת גלים"): item key line + 1-2 line name, then a line of
+# "<qty><price><discount%><total><13-digit barcode>" with no separators.
+_MOSHAEV_NUM_LINE_RE = re.compile(
+    r'^(?P<qty>\d+\.\d{2})(?P<price>[\d,]+\.\d{2})(?P<discount>\d+\.\d{2})(?P<total>[\d,]+\.\d{2})(?P<barcode>\d{13})\s*$'
+)
+# Same numeric block, but not anchored to the start of the line -- some
+# suppliers put the item key + name + numbers all on a single line instead
+# of the number block getting its own line.
+_MOSHAEV_TRAILING_NUM_RE = re.compile(
+    r'(?P<qty>\d+\.\d{2})(?P<price>[\d,]+\.\d{2})(?P<discount>\d+\.\d{2})(?P<total>[\d,]+\.\d{2})(?P<barcode>\d{13})\s*$'
+)
+# Key must be >= 4 chars so we don't misfire on short header fields like
+# "1מחסן" (warehouse: 1) or "2סוכן" (agent: 2). Name can start in Hebrew
+# (most items) or Latin (a few English-only product names).
+_MOSHAEV_KEY_LINE_RE = re.compile(r'^(?P<key>[A-Za-z0-9][A-Za-z0-9\-]{3,}?)(?P<name_start>[^\d\s].*)$')
+
+
+def parse_moshaev(text: str) -> list:
+    items = []
+    pending_key = None
+    pending_name_parts = []
+
+    def close_item(num_match):
+        nonlocal pending_key, pending_name_parts
+        qty, price, discount, total = (
+            _num(num_match.group("qty")), _num(num_match.group("price")),
+            _num(num_match.group("discount")), _num(num_match.group("total")),
+        )
+        expected = round(qty * price * (1 - (discount or 0) / 100), 2) if qty is not None and price is not None else None
+        confident = expected is not None and total is not None and abs(expected - total) < 0.5
+        items.append({
+            "sku": pending_key, "description": " ".join(pending_name_parts).strip(),
+            "quantity": qty, "unit_price": price, "discount_pct": discount,
+            "total": total, "barcode": num_match.group("barcode"), "confident": confident,
+        })
+        pending_key, pending_name_parts = None, []
+
+    for line in text.split("\n"):
+        line_stripped = line.strip()
+        num_m = _MOSHAEV_NUM_LINE_RE.match(line_stripped)
+        if num_m and pending_key:
+            close_item(num_m)
+            continue
+        key_m = _MOSHAEV_KEY_LINE_RE.match(line_stripped)
+        if key_m and not pending_key:
+            pending_key = key_m.group("key")
+            name_start = key_m.group("name_start")
+            trailing_m = _MOSHAEV_TRAILING_NUM_RE.search(name_start)
+            if trailing_m:
+                # key + name + numbers all on one line -- close immediately.
+                pending_name_parts = [name_start[:trailing_m.start()].strip()]
+                close_item(trailing_m)
+            else:
+                pending_name_parts = [name_start.strip()]
+        elif pending_key and line_stripped:
+            pending_name_parts.append(line_stripped)
+    return items
+
+
+# oz-b-g.com ("עוז בת גלים") -- also חשבשבת-produced but a different
+# column layout than moshaev-inv.com (no barcode/discount columns): item
+# key spans 1-2 short lines, then "<name><qty.XX><price.XX><total.XX>
+# <serial#>" closes the item.
+_OZBG_CLOSE_RE = re.compile(
+    r'^(?P<name>[^\d]*?)(?P<qty>\d+\.\d{2})(?P<price>[\d,]+\.\d{2})(?P<total>[\d,]+\.\d{2})\s+(?P<serial>\d+)\s*$'
+)
+_OZBG_HEADER_MARKER = "מפתח פריט"
+
+
+def parse_oz_bat_galim(text: str) -> list:
+    items = []
+    key_lines = []
+    seen_header = False
+    for line in text.split("\n"):
+        line_stripped = line.strip()
+        if not seen_header:
+            if _OZBG_HEADER_MARKER in line_stripped:
+                seen_header = True
+            continue
+        if not line_stripped:
+            continue
+        m = _OZBG_CLOSE_RE.match(line_stripped)
+        if m:
+            qty, price, total = _num(m.group("qty")), _num(m.group("price")), _num(m.group("total"))
+            confident = None not in (qty, price, total) and abs(round(qty * price, 2) - total) < 0.5
+            code_parts = [l for l in key_lines if not _HEBREW_CHAR_RE.search(l)]
+            name_parts = [l for l in key_lines if _HEBREW_CHAR_RE.search(l)]
+            trailing_name = m.group("name").strip()
+            if trailing_name:
+                name_parts.append(trailing_name)
+            items.append({
+                "sku": "".join(code_parts) or "".join(key_lines),
+                "description": " ".join(name_parts).strip(),
+                "quantity": qty, "unit_price": price, "total": total, "confident": confident,
+            })
+            key_lines = []
+        else:
+            key_lines.append(line_stripped)
+    return items
+
+
+# hadarrosen.com (per-branch invoices; printed vendor name on the PDF
+# varies, e.g. "ברקו סנטס"): "₪<total> ₪<price> <scent name><12-13 digit
+# barcode> <qty> <description, may continue on next line>"
+_HADARROSEN_ROW_RE = re.compile(
+    r'₪(?P<total>[\d,]+\.\d{2})\s*'
+    r'₪(?P<price>[\d,]+\.\d{2})\s*'
+    r'(?P<scent>.*?)'
+    r'(?P<barcode>\d{12,13})\s*'
+    r'(?P<qty>\d+)\s*'
+    r'(?P<desc>[^\n₪]+)'
+)
+
+
+def parse_hadarrosen(text: str) -> list:
+    items = []
+    for m in _HADARROSEN_ROW_RE.finditer(text):
+        qty, price, total = _num(m.group("qty")), _num(m.group("price")), _num(m.group("total"))
+        confident = None not in (qty, price, total) and abs(round(qty * price, 2) - total) < 0.5
+        items.append({
+            "sku": m.group("barcode"),
+            "description": (m.group("desc").strip() + " " + m.group("scent").strip()).strip(),
+            "quantity": qty, "unit_price": price, "total": total, "confident": confident,
+        })
+    return items
+
+
+_LINE_ITEM_PARSERS = {
+    "emi-1.com": parse_emi,
+    "moshaev-inv.com": parse_moshaev,
+    "oz-b-g.com": parse_oz_bat_galim,
+    "hadarrosen.com": parse_hadarrosen,
+}
+
+
+def parse_line_items(supplier_domain: str, text: str) -> list:
+    parser = _LINE_ITEM_PARSERS.get(supplier_domain)
+    if not parser or not text:
+        return []
+    try:
+        return parser(text)
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def _extract_pdf_text(pdf_bytes: bytes) -> str:
@@ -98,6 +283,7 @@ def process_new_invoices(lookback_days: int = 30) -> dict:
                     "raw_text": "",
                     "branch": _guess_branch(subject, ""),
                     "invoice_number": _guess_invoice_number(subject, ""),
+                    "line_items": None,
                     "status": "no_pdf_found",
                 })
                 created += 1
@@ -108,6 +294,7 @@ def process_new_invoices(lookback_days: int = 30) -> dict:
             first = pdf_attachments[0]
             pdf_bytes = gmail_client.get_attachment_bytes(message_id, first["attachmentId"])
             text = _extract_pdf_text(pdf_bytes)
+            line_items = parse_line_items(supplier_domain, text)
 
             invoice_store.create_record({
                 "gmail_message_id": message_id,
@@ -119,6 +306,7 @@ def process_new_invoices(lookback_days: int = 30) -> dict:
                 "raw_text": text,
                 "branch": _guess_branch(subject, text),
                 "invoice_number": _guess_invoice_number(subject, text),
+                "line_items": line_items or None,
                 "status": "needs_review",
             })
             created += 1
