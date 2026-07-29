@@ -414,6 +414,20 @@ def inventory_check_now(request: Request):
         return Response(f"Error checking for new invoices: {e}", status_code=500)
 
 
+@app.post("/api/inventory/resolve-item/{record_id}/{item_index}")
+async def inventory_resolve_item(record_id: int, item_index: int, request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    payload = await request.json()
+    resolved = bool(payload.get("resolved", True))
+    try:
+        invoice_store.update_line_item(record_id, item_index, {"resolved": resolved})
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error updating item: {e}", status_code=500)
+    return {"status": "updated"}
+
+
 @app.post("/api/inventory/mark/{record_id}")
 async def inventory_mark(record_id: int, request: Request):
     unauthorized = _require_api_auth(request)
