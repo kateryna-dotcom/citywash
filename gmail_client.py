@@ -24,6 +24,20 @@ import requests
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 
+
+def _raise_with_body(resp: requests.Response):
+    """requests' default raise_for_status() message doesn't include the
+    response body, which is where Google puts the actual reason (disabled
+    API, insufficient scope, org policy block, etc). Surface it so errors
+    shown in the מלАי tab are actually actionable."""
+    if resp.ok:
+        return
+    try:
+        detail = resp.json()
+    except ValueError:
+        detail = resp.text
+    raise requests.HTTPError(f"{resp.status_code} {resp.reason} for {resp.url}: {detail}", response=resp)
+
 # Domains of the suppliers whose invoices should feed into מלАי. Matching by
 # domain (not exact address) because some suppliers send from several
 # different employee addresses at the same company (e.g. emi-1.com).
@@ -54,7 +68,7 @@ def _get_access_token() -> str:
         },
         timeout=30,
     )
-    resp.raise_for_status()
+    _raise_with_body(resp)
     return resp.json()["access_token"]
 
 
@@ -79,7 +93,7 @@ def list_new_invoice_messages(after: datetime | None = None, max_results: int = 
     against already-processed message ids (stored in Postgres)."""
     params = {"q": _build_supplier_query(after), "maxResults": max_results}
     resp = requests.get(f"{API_BASE}/messages", headers=_headers(), params=params, timeout=30)
-    resp.raise_for_status()
+    _raise_with_body(resp)
     return resp.json().get("messages", [])
 
 
@@ -92,7 +106,7 @@ def get_message(message_id: str) -> dict:
         params={"format": "full"},
         timeout=30,
     )
-    resp.raise_for_status()
+    _raise_with_body(resp)
     return resp.json()
 
 
@@ -129,7 +143,7 @@ def get_attachment_bytes(message_id: str, attachment_id: str) -> bytes:
         headers=_headers(),
         timeout=60,
     )
-    resp.raise_for_status()
+    _raise_with_body(resp)
     data_b64url = resp.json()["data"]
     # Gmail uses URL-safe base64 without padding.
     return base64.urlsafe_b64decode(data_b64url + "=" * (-len(data_b64url) % 4))
