@@ -130,6 +130,16 @@ def update_line_item(record_id: int, item_index: int, updates: dict):
         conn.commit()
 
 
+def update_branch(record_id: int, branch: str):
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE invoice_records SET branch=%s, updated_at=now() WHERE id=%s",
+                (branch, record_id),
+            )
+        conn.commit()
+
+
 def update_status(record_id: int, status: str, note: str = None):
     with _get_conn() as conn:
         with conn.cursor() as cur:
