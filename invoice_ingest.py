@@ -19,6 +19,7 @@ from email.utils import parsedate_to_datetime
 
 from pypdf import PdfReader
 
+import branches
 import gmail_client
 import invoice_store
 
@@ -228,10 +229,17 @@ def _extract_pdf_text(pdf_bytes: bytes) -> str:
 
 
 def _guess_branch(subject: str, text: str) -> str:
+    # hadarrosen sends one email per branch with the branch name spelled
+    # out in the subject -- that's the most reliable signal when present.
     m = _BRANCH_SUBJECT_RE.search(subject or "")
     if m:
         return m.group(1).strip()
-    return ""
+    # Otherwise, best-effort match against the canonical branch list inside
+    # the invoice text itself (e.g. moshaev/oz-b-g PDFs print the branch
+    # name on the "לכבוד" / bill-to line). Just a starting guess -- always
+    # shown as an editable dropdown in the review UI so it can be corrected
+    # in one click if wrong or missing.
+    return branches.detect_branch(text) or ""
 
 
 def _guess_invoice_number(subject: str, text: str) -> str:
