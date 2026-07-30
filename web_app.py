@@ -36,6 +36,7 @@ from contract_filler import (
 )
 from esign import send_for_sms_signature
 import pension_store
+import branches
 import invoice_store
 import invoice_ingest
 
@@ -401,6 +402,30 @@ def inventory_branches(request: Request):
         return invoice_store.list_branches()
     except Exception as e:  # noqa: BLE001
         return Response(f"Error loading branches: {e}", status_code=500)
+
+
+@app.get("/api/inventory/branch-options")
+def inventory_branch_options(request: Request):
+    """Canonical branch list (matches the Cash On Tab dropdown), used to
+    populate the editable branch picker on each invoice card."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    return branches.BRANCHES
+
+
+@app.post("/api/inventory/set-branch/{record_id}")
+async def inventory_set_branch(record_id: int, request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    payload = await request.json()
+    branch = (payload.get("branch") or "").strip()
+    try:
+        invoice_store.update_branch(record_id, branch)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error updating branch: {e}", status_code=500)
+    return {"status": "updated"}
 
 
 @app.post("/api/inventory/check-now")
