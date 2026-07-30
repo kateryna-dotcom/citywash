@@ -59,7 +59,12 @@
   .items-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
   .items-table tr.low-confidence td { background: var(--red-light); }
   .items-table .num { direction: ltr; text-align: left; }
-  .card-actions { margin-top: 10px; display: flex; gap: 8px; }
+  .card-actions { margin-top: 10px; display: flex; gap: 8px; align-items: center; }
+  .branch-picker {
+    padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px;
+    font-size: 12.5px; font-family: inherit; background: #fff; color: var(--text);
+  }
+  .branch-picker.unset { border-color: var(--red); color: var(--red); }
   .empty { text-align: center; color: #5b7186; padding: 60px 20px; }
 </style>
 </head>
@@ -78,6 +83,21 @@
   <div id="emptyMsg" class="empty" style="display:none">אין עדיין חשבוניות. לחצי על "בדוק עכשיו" כדי לבדוק את המייל.</div>
 
 <script>
+let branchOptions = [];
+
+async function loadBranchOptions() {
+  const res = await fetch("/api/inventory/branch-options");
+  if (!res.ok) return;
+  branchOptions = await res.json();
+}
+
+async function setBranch(recordId, branch) {
+  const res = await fetch(`/api/inventory/set-branch/${recordId}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ branch }),
+  });
+  if (res.ok) { await loadBranches(); await loadRecords(); }
+}
+
 async function loadBranches() {
   const res = await fetch("/api/inventory/branches");
   if (!res.ok) return;
@@ -144,7 +164,6 @@ async function loadRecords() {
           <div>
             <div class="card-title">${escapeHtml(r.subject || "(ללא נושא)")}</div>
             <div class="card-sub">${escapeHtml(r.sender_email || "")} · ${escapeHtml(received)}
-              ${r.branch ? " · סניף: " + escapeHtml(r.branch) : ""}
               ${r.invoice_number ? " · מס' חשבונית: " + escapeHtml(r.invoice_number) : ""}
             </div>
           </div>
@@ -155,6 +174,11 @@ async function loadRecords() {
       <button class="toggle-raw" onclick="event.stopPropagation(); toggleRaw(${r.id})">הצג/הסתר טקסט מקורי</button>
       <div class="raw-text" id="raw-${r.id}">${escapeHtml(r.raw_text || "(אין טקסט)")}</div>
       <div class="card-actions">
+        <label style="font-size:12.5px;color:#5b7186;">סניף:</label>
+        <select class="branch-picker ${r.branch ? "" : "unset"}" onchange="event.stopPropagation(); setBranch(${r.id}, this.value)">
+          <option value="">— לא נבחר —</option>
+          ${branchOptions.map(b => `<option value="${escapeHtml(b)}" ${b === r.branch ? "selected" : ""}>${escapeHtml(b)}</option>`).join("")}
+        </select>
         ${isReview ? `<button class="btn small" onclick="markOk(${r.id})">✓ סימנתי כטופל</button>` : ""}
       </div>
     `;
@@ -198,8 +222,8 @@ async function checkNow() {
   await loadRecords();
 }
 
+loadBranchOptions().then(loadRecords);
 loadBranches();
-loadRecords();
 </script>
 </body>
 </html>
