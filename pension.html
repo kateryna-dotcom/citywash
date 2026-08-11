@@ -148,8 +148,16 @@ const FUND_DOMAINS = {
   "מגדל": "migdal.co.il",
   "פניקס": "fnx.co.il",
   "הראל": "harel-group.co.il",
-  "מור": "moreinvest.co.il",
+  "מור": "more.co.il",
   "אנליסט": "analyst.co.il",
+};
+
+// A couple of funds don't have a domain-based logo indexed anywhere
+// (Clearbit/Google/DuckDuckGo all miss them) -- direct Wikimedia file
+// links found by hand take priority over the domain lookup for these.
+const FUND_LOGO_OVERRIDES = {
+  "כלל": "https://commons.wikimedia.org/wiki/Special:FilePath/%D7%9C%D7%95%D7%92%D7%95_%D7%9B%D7%9C%D7%9C_%D7%91%D7%99%D7%98%D7%95%D7%97.svg",
+  "אלטשולר": "https://he.wikipedia.org/wiki/Special:FilePath/%D7%90%D7%9C%D7%98%D7%A9%D7%95%D7%9C%D7%A8_%D7%A9%D7%97%D7%9D.png",
 };
 
 function escapeHtml(s) {
@@ -195,12 +203,18 @@ async function showFunds(companyName) {
     let dot = "";
     if (s) dot = `<span class="status-dot ${s.has_issue ? "issue" : "ok"}"></span>`;
     const domain = FUND_DOMAINS[f];
-    // Two independent logo sources chained via onerror, since not every
-    // Israeli finance domain is indexed by Clearbit: Clearbit's real logo
-    // first, then Google's favicon service (near-universal coverage but
-    // lower quality), then the building emoji as a last resort.
-    const logo = domain
-      ? `<img class="fund-logo" src="https://logo.clearbit.com/${domain}?size=120" alt="${escapeHtml(f)}" data-fallback="https://www.google.com/s2/favicons?domain=${domain}&sz=64" onerror="if(this.dataset.fallback){this.src=this.dataset.fallback;this.removeAttribute('data-fallback');}else{this.replaceWith(Object.assign(document.createElement('span'),{className:'icon',textContent:'🏦'}));}">`
+    const override = FUND_LOGO_OVERRIDES[f];
+    // Chain of logo sources tried in order via onerror, since no single
+    // service indexes every Israeli finance company: a hand-picked direct
+    // link (if we found one) or Clearbit's logo first, then Google's
+    // favicon, then DuckDuckGo's icon service, then the building emoji.
+    const chain = [
+      override || (domain ? `https://logo.clearbit.com/${domain}?size=120` : null),
+      domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=64` : null,
+      domain ? `https://icons.duckduckgo.com/ip3/${domain}.ico` : null,
+    ].filter(Boolean);
+    const logo = chain.length
+      ? `<img class="fund-logo" src="${chain[0]}" alt="${escapeHtml(f)}" data-chain='${JSON.stringify(chain.slice(1))}' onerror="const c=JSON.parse(this.dataset.chain||'[]');if(c.length){this.src=c.shift();this.dataset.chain=JSON.stringify(c);}else{this.replaceWith(Object.assign(document.createElement('span'),{className:'icon',textContent:'🏦'}));}">`
       : `<span class="icon">🏦</span>`;
     return `
       <div class="card fund-card" onclick="openCell('${escapeHtml(f)}')">
