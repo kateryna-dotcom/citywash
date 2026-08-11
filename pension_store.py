@@ -196,11 +196,15 @@ def list_summary_for_company(company_name: str) -> dict:
 
 def upsert_record(company_name: str, fund_name: str, fields: dict) -> int:
     """Creates the (company, fund) record if it doesn't exist yet, otherwise
-    updates it in place -- one cell, one record. Password left blank in the
-    form means "keep the existing one" (same convention as update_record)."""
+    updates it in place -- one cell, one record. The password field always
+    reflects (and overwrites with) whatever is currently in the form --
+    the UI now shows the saved password in plain text when the cell is
+    opened, so there's no more "leave blank to keep the old one" ambiguity.
+    Still encrypted at rest in Postgres (Fernet); that's invisible to her,
+    just protects the DB itself."""
     existing = get_record(company_name, fund_name)
     fernet = _get_fernet()
-    password = fields.get("portal_password")
+    password = fields.get("portal_password") or ""
     # 2-5 named accounts used when transferring/reporting deposits for this
     # company+fund cell. Stored as a plain JSON list of strings.
     accounts = [a.strip() for a in (fields.get("transfer_accounts") or []) if a and a.strip()]
@@ -209,29 +213,17 @@ def upsert_record(company_name: str, fund_name: str, fields: dict) -> int:
     with _get_conn() as conn:
         with conn.cursor() as cur:
             if existing:
-                if password:
-                    encrypted = fernet.encrypt(password.encode()).decode()
-                    cur.execute("""
-                        UPDATE pension_records SET
-                            portal_url=%s, portal_username=%s, portal_password_encrypted=%s,
-                            notes=%s, has_issue=%s, transfer_accounts=%s, updated_at=now()
-                        WHERE id=%s
-                    """, (
-                        fields.get("portal_url", ""), fields.get("portal_username", ""),
-                        encrypted, fields.get("notes", ""), bool(fields.get("has_issue")),
-                        accounts_json, existing["id"],
-                    ))
-                else:
-                    cur.execute("""
-                        UPDATE pension_records SET
-                            portal_url=%s, portal_username=%s,
-                            notes=%s, has_issue=%s, transfer_accounts=%s, updated_at=now()
-                        WHERE id=%s
-                    """, (
-                        fields.get("portal_url", ""), fields.get("portal_username", ""),
-                        fields.get("notes", ""), bool(fields.get("has_issue")),
-                        accounts_json, existing["id"],
-                    ))
+                encrypted = fernet.encrypt(password.encode()).decode() if password else None
+                cur.execute("""
+                    UPDATE pension_records SET
+                        portal_url=%s, portal_username=%s, portal_password_encrypted=%s,
+                        notes=%s, has_issue=%s, transfer_accounts=%s, updated_at=now()
+                    WHERE id=%s
+                """, (
+                    fields.get("portal_url", ""), fields.get("portal_username", ""),
+                    encrypted, fields.get("notes", ""), bool(fields.get("has_issue")),
+                    accounts_json, existing["id"],
+                ))
                 conn.commit()
                 return existing["id"]
             else:
