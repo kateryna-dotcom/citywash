@@ -54,6 +54,7 @@ def init_db():
                     notes TEXT,
                     has_issue BOOLEAN NOT NULL DEFAULT FALSE,
                     issue_description TEXT,
+                    transfer_accounts JSONB,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 );
@@ -63,6 +64,8 @@ def init_db():
             # constraint on tables created before this change (no-op if
             # already nullable).
             cur.execute("ALTER TABLE pension_records ALTER COLUMN employee_name DROP NOT NULL;")
+            # Table may predate the transfer-accounts field too.
+            cur.execute("ALTER TABLE pension_records ADD COLUMN IF NOT EXISTS transfer_accounts JSONB;")
         conn.commit()
 
 
@@ -198,6 +201,10 @@ def upsert_record(company_name: str, fund_name: str, fields: dict) -> int:
     existing = get_record(company_name, fund_name)
     fernet = _get_fernet()
     password = fields.get("portal_password")
+    # 2-5 named accounts used when transferring/reporting deposits for this
+    # company+fund cell. Stored as a plain JSON list of strings.
+    accounts = [a.strip() for a in (fields.get("transfer_accounts") or []) if a and a.strip()]
+    accounts_json = psycopg2.extras.Json(accounts)
 
     with _get_conn() as conn:
         with conn.cursor() as cur:
@@ -207,23 +214,23 @@ def upsert_record(company_name: str, fund_name: str, fields: dict) -> int:
                     cur.execute("""
                         UPDATE pension_records SET
                             portal_url=%s, portal_username=%s, portal_password_encrypted=%s,
-                            notes=%s, has_issue=%s, updated_at=now()
+                            notes=%s, has_issue=%s, transfer_accounts=%s, updated_at=now()
                         WHERE id=%s
                     """, (
                         fields.get("portal_url", ""), fields.get("portal_username", ""),
                         encrypted, fields.get("notes", ""), bool(fields.get("has_issue")),
-                        existing["id"],
+                        accounts_json, existing["id"],
                     ))
                 else:
                     cur.execute("""
                         UPDATE pension_records SET
                             portal_url=%s, portal_username=%s,
-                            notes=%s, has_issue=%s, updated_at=now()
+                            notes=%s, has_issue=%s, transfer_accounts=%s, updated_at=now()
                         WHERE id=%s
                     """, (
                         fields.get("portal_url", ""), fields.get("portal_username", ""),
                         fields.get("notes", ""), bool(fields.get("has_issue")),
-                        existing["id"],
+                        accounts_json, existing["id"],
                     ))
                 conn.commit()
                 return existing["id"]
@@ -232,13 +239,13 @@ def upsert_record(company_name: str, fund_name: str, fields: dict) -> int:
                 cur.execute("""
                     INSERT INTO pension_records
                         (employee_name, company_name, fund_name, portal_url, portal_username,
-                         portal_password_encrypted, notes, has_issue)
-                    VALUES ('', %s, %s, %s, %s, %s, %s, %s)
+                         portal_password_encrypted, notes, has_issue, transfer_accounts)
+                    VALUES ('', %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                 """, (
                     company_name, fund_name, fields.get("portal_url", ""),
                     fields.get("portal_username", ""), encrypted,
-                    fields.get("notes", ""), bool(fields.get("has_issue")),
+                    fields.get("notes", ""), bool(fields.get("has_issue")), accounts_json,
                 ))
                 new_id = cur.fetchone()[0]
                 conn.commit()
