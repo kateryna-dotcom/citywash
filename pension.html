@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
@@ -52,6 +53,20 @@
   textarea { resize: vertical; }
   .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 16px; font-size: 13.5px; }
   .checkbox-row input { width: auto; }
+  .account-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .account-row input { flex: 1; }
+  .account-remove {
+    width: 30px; height: 30px; flex-shrink: 0; border: 1px solid var(--border); border-radius: 8px;
+    background: #fff; color: var(--red); cursor: pointer; font-size: 15px; line-height: 1;
+  }
+  .account-remove:hover { background: var(--red-light); }
+  .account-remove:disabled { opacity: 0.35; cursor: default; }
+  .add-account-btn {
+    background: none; border: 1px dashed var(--border); border-radius: 8px; color: var(--blue);
+    font-size: 13px; padding: 7px 12px; cursor: pointer; width: 100%; margin-top: 4px;
+  }
+  .add-account-btn:hover { background: var(--blue-light); }
+  .add-account-btn:disabled { opacity: 0.4; cursor: default; }
   .actions { display: flex; gap: 10px; margin-top: 20px; }
   .btn {
     background: var(--blue); color: #fff; border: none; border-radius: 8px; padding: 10px 20px;
@@ -93,6 +108,10 @@
 
         <label>סיסמה באתר</label>
         <input type="password" id="f-password" placeholder="השאר ריק כדי לשמור על הסיסמה הקיימת">
+
+        <label>חשבונות להעברה</label>
+        <div id="account-rows"></div>
+        <button type="button" class="add-account-btn" id="add-account-btn" onclick="addAccountRow()">+ הוסף חשבון</button>
 
         <label>הערות</label>
         <textarea id="f-notes" rows="3"></textarea>
@@ -193,6 +212,38 @@ async function showFunds(companyName) {
   }).join("");
 }
 
+const MIN_ACCOUNTS = 2;
+const MAX_ACCOUNTS = 5;
+
+function renderAccountRows(values) {
+  const wrap = document.getElementById("account-rows");
+  wrap.innerHTML = values.map((v, i) => `
+    <div class="account-row">
+      <input type="text" class="account-input" placeholder="שם החשבון" value="${escapeHtml(v)}">
+      <button type="button" class="account-remove" onclick="removeAccountRow(${i})" ${values.length <= MIN_ACCOUNTS ? "disabled" : ""}>×</button>
+    </div>
+  `).join("");
+  document.getElementById("add-account-btn").disabled = values.length >= MAX_ACCOUNTS;
+}
+
+function getAccountValues() {
+  return Array.from(document.querySelectorAll(".account-input")).map(el => el.value);
+}
+
+function addAccountRow() {
+  const values = getAccountValues();
+  if (values.length >= MAX_ACCOUNTS) return;
+  values.push("");
+  renderAccountRows(values);
+}
+
+function removeAccountRow(idx) {
+  const values = getAccountValues();
+  if (values.length <= MIN_ACCOUNTS) return;
+  values.splice(idx, 1);
+  renderAccountRows(values);
+}
+
 async function openCell(fundName) {
   currentFund = fundName;
   document.getElementById("view-funds").classList.add("hidden");
@@ -205,6 +256,7 @@ async function openCell(fundName) {
   document.getElementById("f-password").value = "";
   document.getElementById("f-notes").value = "";
   document.getElementById("f-issue").checked = false;
+  renderAccountRows(["", ""]);
 
   const res = await fetch(`/api/pension/cell?company=${encodeURIComponent(currentCompany)}&fund=${encodeURIComponent(currentFund)}`);
   const data = res.ok ? await res.json() : {};
@@ -213,6 +265,9 @@ async function openCell(fundName) {
     document.getElementById("f-username").value = data.portal_username || "";
     document.getElementById("f-notes").value = data.notes || "";
     document.getElementById("f-issue").checked = !!data.has_issue;
+    const accounts = (data.transfer_accounts && data.transfer_accounts.length) ? data.transfer_accounts.slice() : [];
+    while (accounts.length < MIN_ACCOUNTS) accounts.push("");
+    renderAccountRows(accounts);
     document.getElementById("form-status").textContent = "";
   } else {
     document.getElementById("form-status").textContent = "";
@@ -230,6 +285,7 @@ async function saveCell() {
     portal_password: document.getElementById("f-password").value,
     notes: document.getElementById("f-notes").value,
     has_issue: document.getElementById("f-issue").checked,
+    transfer_accounts: getAccountValues(),
   };
   const res = await fetch("/api/pension/cell", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
