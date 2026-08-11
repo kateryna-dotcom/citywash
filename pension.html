@@ -176,8 +176,12 @@ async function showFunds(companyName) {
     let dot = "";
     if (s) dot = `<span class="status-dot ${s.has_issue ? "issue" : "ok"}"></span>`;
     const domain = FUND_DOMAINS[f];
+    // Two independent logo sources chained via onerror, since not every
+    // Israeli finance domain is indexed by Clearbit: Clearbit's real logo
+    // first, then Google's favicon service (near-universal coverage but
+    // lower quality), then the building emoji as a last resort.
     const logo = domain
-      ? `<img class="fund-logo" src="https://logo.clearbit.com/${domain}?size=120" alt="${escapeHtml(f)}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'icon',textContent:'🏦'}))">`
+      ? `<img class="fund-logo" src="https://logo.clearbit.com/${domain}?size=120" alt="${escapeHtml(f)}" data-fallback="https://www.google.com/s2/favicons?domain=${domain}&sz=64" onerror="if(this.dataset.fallback){this.src=this.dataset.fallback;this.removeAttribute('data-fallback');}else{this.replaceWith(Object.assign(document.createElement('span'),{className:'icon',textContent:'🏦'}));}">`
       : `<span class="icon">🏦</span>`;
     return `
       <div class="card fund-card" onclick="openCell('${escapeHtml(f)}')">
