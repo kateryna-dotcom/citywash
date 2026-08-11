@@ -106,7 +106,7 @@
         <input type="text" id="f-username">
 
         <label>סיסמה באתר</label>
-        <input type="password" id="f-password" placeholder="השאר ריק כדי לשמור על הסיסמה הקיימת">
+        <input type="text" id="f-password">
 
         <label>חשבונות להעברה</label>
         <div id="account-rows"></div>
@@ -278,6 +278,7 @@ async function openCell(fundName) {
   if (data && data.id) {
     document.getElementById("f-url").value = data.portal_url || "";
     document.getElementById("f-username").value = data.portal_username || "";
+    document.getElementById("f-password").value = data.portal_password || "";
     document.getElementById("f-notes").value = data.notes || "";
     document.getElementById("f-issue").checked = !!data.has_issue;
     const accounts = (data.transfer_accounts && data.transfer_accounts.length) ? data.transfer_accounts.slice() : [];
