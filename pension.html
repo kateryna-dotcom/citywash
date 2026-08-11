@@ -40,6 +40,7 @@
   .fund-card .name { text-align: center; font-size: 14.5px; }
   .fund-card { text-align: center; }
   .fund-card .icon { display: block; }
+  .fund-logo { height: 32px; max-width: 100px; object-fit: contain; }
   .form-wrap { max-width: 460px; }
   .form-card { background: #fff; border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
   label { display: block; font-size: 13px; color: #5b7186; margin: 14px 0 5px; }
@@ -117,6 +118,21 @@ let currentCompany = null;
 let currentFund = null;
 let fundSummary = {};
 
+// Official domains, used to pull each fund's real logo via Clearbit's logo
+// API instead of a generic icon. Falls back to the building emoji if a
+// logo fails to load (onerror handler on the <img> below).
+const FUND_DOMAINS = {
+  "מיטב דש": "meitav.co.il",
+  "מנורה": "menoramivt.co.il",
+  "כלל": "clalbit.co.il",
+  "אלטשולר": "as-invest.co.il",
+  "מגדל": "migdal.co.il",
+  "פניקס": "fnx.co.il",
+  "הראל": "harel-group.co.il",
+  "מור": "moreinvest.co.il",
+  "אנליסט": "analyst.co.il",
+};
+
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
@@ -159,10 +175,14 @@ async function showFunds(companyName) {
     const s = fundSummary[f];
     let dot = "";
     if (s) dot = `<span class="status-dot ${s.has_issue ? "issue" : "ok"}"></span>`;
+    const domain = FUND_DOMAINS[f];
+    const logo = domain
+      ? `<img class="fund-logo" src="https://logo.clearbit.com/${domain}?size=120" alt="${escapeHtml(f)}" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'icon',textContent:'🏦'}))">`
+      : `<span class="icon">🏦</span>`;
     return `
       <div class="card fund-card" onclick="openCell('${escapeHtml(f)}')">
         ${dot}
-        <span class="icon">🏦</span>
+        ${logo}
         <div class="name">${escapeHtml(f)}</div>
       </div>
     `;
