@@ -1,3 +1,4 @@
+
 """
 Standalone web page (no WhatsApp/Meta/Telegram needed) that looks like a
 WhatsApp chat and generates HR documents for א.ב.ת. שירותי שטיפה:
@@ -36,6 +37,7 @@ from contract_filler import (
 )
 from esign import send_for_sms_signature
 import pension_store
+import pension_companies
 import branches
 import invoice_store
 import invoice_ingest
@@ -380,6 +382,65 @@ def pension_delete(record_id: int, request: Request):
     except Exception as e:  # noqa: BLE001
         return Response(f"Error deleting pension record: {e}", status_code=500)
     return {"status": "deleted"}
+
+
+# --- Redesigned פנסיה: company -> fund matrix (replaces the old
+# per-employee CRUD above; kept alongside it so nothing else breaks). ---
+
+@app.get("/api/pension/companies")
+def pension_companies_list(request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    return pension_companies.COMPANIES
+
+
+@app.get("/api/pension/funds")
+def pension_funds_list(request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    return pension_companies.FUNDS
+
+
+@app.get("/api/pension/summary")
+def pension_summary(request: Request, company: str):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        return pension_store.list_summary_for_company(company)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error loading summary: {e}", status_code=500)
+
+
+@app.get("/api/pension/cell")
+def pension_cell(request: Request, company: str, fund: str):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        record = pension_store.get_record(company, fund)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error loading record: {e}", status_code=500)
+    return record or {}
+
+
+@app.post("/api/pension/cell")
+async def pension_cell_save(request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    payload = await request.json()
+    company = (payload.get("company") or "").strip()
+    fund = (payload.get("fund") or "").strip()
+    if not company or not fund:
+        return Response("company and fund are required", status_code=400)
+    try:
+        record_id = pension_store.upsert_record(company, fund, payload)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error saving record: {e}", status_code=500)
+    return {"status": "saved", "id": record_id}
 
 
 @app.get("/api/inventory/list")
