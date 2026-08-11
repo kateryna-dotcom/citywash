@@ -45,7 +45,7 @@ def init_db():
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS pension_records (
                     id SERIAL PRIMARY KEY,
-                    employee_name TEXT NOT NULL,
+                    employee_name TEXT,
                     company_name TEXT,
                     fund_name TEXT,
                     portal_url TEXT,
@@ -58,6 +58,11 @@ def init_db():
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 );
             """)
+            # Table predates the company+fund redesign, where employee_name
+            # was required. New records no longer set it -- relax the
+            # constraint on tables created before this change (no-op if
+            # already nullable).
+            cur.execute("ALTER TABLE pension_records ALTER COLUMN employee_name DROP NOT NULL;")
         conn.commit()
 
 
@@ -145,6 +150,99 @@ def update_record(record_id: int, fields: dict):
                     record_id,
                 ))
         conn.commit()
+
+
+def get_record(company_name: str, fund_name: str) -> dict:
+    """One record per (company, fund) cell in the new matrix UI. Returns
+    None if Kateryna hasn't filled anything in for this cell yet."""
+    fernet = _get_fernet()
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM pension_records WHERE company_name=%s AND fund_name=%s ORDER BY id DESC LIMIT 1",
+                (company_name, fund_name),
+            )
+            row = cur.fetchone()
+    if not row:
+        return None
+    row = dict(row)
+    enc = row.pop("portal_password_encrypted", None)
+    if enc:
+        try:
+            row["portal_password"] = fernet.decrypt(enc.encode()).decode()
+        except InvalidToken:
+            row["portal_password"] = None
+    else:
+        row["portal_password"] = ""
+    return row
+
+
+def list_summary_for_company(company_name: str) -> dict:
+    """{fund_name: {"exists": bool, "has_issue": bool}} for every fund that
+    already has a saved record under this company -- used to show a status
+    dot on each fund card without loading the full (decrypted) record."""
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT fund_name, has_issue FROM pension_records WHERE company_name=%s",
+                (company_name,),
+            )
+            rows = cur.fetchall()
+    return {r["fund_name"]: {"exists": True, "has_issue": r["has_issue"]} for r in rows}
+
+
+def upsert_record(company_name: str, fund_name: str, fields: dict) -> int:
+    """Creates the (company, fund) record if it doesn't exist yet, otherwise
+    updates it in place -- one cell, one record. Password left blank in the
+    form means "keep the existing one" (same convention as update_record)."""
+    existing = get_record(company_name, fund_name)
+    fernet = _get_fernet()
+    password = fields.get("portal_password")
+
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            if existing:
+                if password:
+                    encrypted = fernet.encrypt(password.encode()).decode()
+                    cur.execute("""
+                        UPDATE pension_records SET
+                            portal_url=%s, portal_username=%s, portal_password_encrypted=%s,
+                            notes=%s, has_issue=%s, updated_at=now()
+                        WHERE id=%s
+                    """, (
+                        fields.get("portal_url", ""), fields.get("portal_username", ""),
+                        encrypted, fields.get("notes", ""), bool(fields.get("has_issue")),
+                        existing["id"],
+                    ))
+                else:
+                    cur.execute("""
+                        UPDATE pension_records SET
+                            portal_url=%s, portal_username=%s,
+                            notes=%s, has_issue=%s, updated_at=now()
+                        WHERE id=%s
+                    """, (
+                        fields.get("portal_url", ""), fields.get("portal_username", ""),
+                        fields.get("notes", ""), bool(fields.get("has_issue")),
+                        existing["id"],
+                    ))
+                conn.commit()
+                return existing["id"]
+            else:
+                encrypted = fernet.encrypt(password.encode()).decode() if password else None
+                cur.execute("""
+                    INSERT INTO pension_records
+                        (employee_name, company_name, fund_name, portal_url, portal_username,
+                         portal_password_encrypted, notes, has_issue)
+                    VALUES ('', %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
+                    company_name, fund_name, fields.get("portal_url", ""),
+                    fields.get("portal_username", ""), encrypted,
+                    fields.get("notes", ""), bool(fields.get("has_issue")),
+                ))
+                new_id = cur.fetchone()[0]
+                conn.commit()
+                return new_id
 
 
 def delete_record(record_id: int):
