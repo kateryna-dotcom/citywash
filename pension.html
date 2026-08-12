@@ -66,6 +66,23 @@
   }
   .add-account-btn:hover { background: var(--blue-light); }
   .add-account-btn:disabled { opacity: 0.4; cursor: default; }
+  .attachments-wrap { margin-top: 10px; padding-right: 22px; }
+  .attachment-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px;
+    font-size: 13px; background: #f8fafc;
+  }
+  .attachment-row a { color: var(--blue); text-decoration: none; font-weight: 600; }
+  .attachment-row a:hover { text-decoration: underline; }
+  .attachment-remove {
+    border: none; background: none; color: var(--red); cursor: pointer; font-size: 15px; padding: 0 4px;
+  }
+  .attach-file-btn {
+    display: inline-block; margin-top: 4px; font-size: 13px; color: var(--blue); cursor: pointer;
+    border: 1px dashed var(--border); border-radius: 8px; padding: 7px 12px; text-align: center; width: 100%;
+  }
+  .attach-file-btn:hover { background: var(--blue-light); }
+  .attach-hint { font-size: 12px; color: var(--text-secondary, #5b7186); margin-top: 6px; }
   .actions { display: flex; gap: 10px; margin-top: 20px; }
   .btn {
     background: var(--blue); color: #fff; border: none; border-radius: 8px; padding: 10px 20px;
@@ -116,8 +133,15 @@
         <textarea id="f-notes" rows="3"></textarea>
 
         <div class="checkbox-row">
-          <input type="checkbox" id="f-issue">
+          <input type="checkbox" id="f-issue" onchange="toggleAttachmentsSection()">
           <label style="margin:0;" for="f-issue">יש בעיה / חוב שצריך לטפל בו</label>
+        </div>
+
+        <div id="attachments-section" class="attachments-wrap hidden">
+          <div id="attachments-list"></div>
+          <label class="attach-file-btn" id="attach-file-btn" for="f-attachment-input">📎 צרף קובץ PDF (אפשר כמה)</label>
+          <input type="file" id="f-attachment-input" accept="application/pdf" multiple style="display:none;" onchange="onAttachmentFilesChosen()">
+          <div class="attach-hint" id="attachments-hint"></div>
         </div>
 
         <div class="actions">
@@ -134,6 +158,7 @@ let companies = [];
 let funds = [];
 let currentCompany = null;
 let currentFund = null;
+let currentRecordId = null;
 let fundSummary = {};
 
 // Official domains, used to pull each fund's real logo via Clearbit's logo
@@ -259,8 +284,67 @@ function removeAccountRow(idx) {
   renderAccountRows(values);
 }
 
+function toggleAttachmentsSection() {
+  const show = document.getElementById("f-issue").checked;
+  document.getElementById("attachments-section").classList.toggle("hidden", !show);
+}
+
+async function loadAttachments(recordId) {
+  const listEl = document.getElementById("attachments-list");
+  const hintEl = document.getElementById("attachments-hint");
+  if (!recordId) {
+    listEl.innerHTML = "";
+    hintEl.textContent = "הקובץ יתווסף אחרי השמירה הראשונה -- הקבצים ייטענו אוטומטית ברגע שתבחרי אותם.";
+    return;
+  }
+  hintEl.textContent = "";
+  const res = await fetch(`/api/pension/attachments/${recordId}`);
+  const items = res.ok ? await res.json() : [];
+  listEl.innerHTML = items.map(a => `
+    <div class="attachment-row">
+      <a href="/api/pension/attachment/${a.id}" target="_blank" rel="noopener">📄 ${escapeHtml(a.filename)}</a>
+      <button type="button" class="attachment-remove" onclick="removeAttachment(${a.id})">×</button>
+    </div>
+  `).join("") || "";
+}
+
+async function removeAttachment(attachmentId) {
+  const res = await fetch(`/api/pension/attachment/delete/${attachmentId}`, { method: "POST" });
+  if (res.ok) loadAttachments(currentRecordId);
+}
+
+async function onAttachmentFilesChosen() {
+  const input = document.getElementById("f-attachment-input");
+  const files = Array.from(input.files || []);
+  if (!files.length) return;
+  const hintEl = document.getElementById("attachments-hint");
+
+  if (!currentRecordId) {
+    hintEl.textContent = "שומר תחילה...";
+    const id = await doSaveCell();
+    if (!id) {
+      hintEl.textContent = "שגיאה בשמירה -- לא ניתן היה לצרף את הקובץ.";
+      return;
+    }
+    currentRecordId = id;
+  }
+
+  hintEl.textContent = "מעלה קבצים...";
+  const formData = new FormData();
+  files.forEach(f => formData.append("files", f));
+  const res = await fetch(`/api/pension/attachments/${currentRecordId}`, { method: "POST", body: formData });
+  input.value = "";
+  if (res.ok) {
+    hintEl.textContent = "";
+    loadAttachments(currentRecordId);
+  } else {
+    hintEl.textContent = "שגיאה בהעלאת הקובץ: " + (await res.text());
+  }
+}
+
 async function openCell(fundName) {
   currentFund = fundName;
+  currentRecordId = null;
   document.getElementById("view-funds").classList.add("hidden");
   document.getElementById("view-form").classList.remove("hidden");
   document.getElementById("form-title").textContent = currentCompany + " · " + currentFund;
@@ -272,10 +356,13 @@ async function openCell(fundName) {
   document.getElementById("f-notes").value = "";
   document.getElementById("f-issue").checked = false;
   renderAccountRows(["", ""]);
+  toggleAttachmentsSection();
+  loadAttachments(null);
 
   const res = await fetch(`/api/pension/cell?company=${encodeURIComponent(currentCompany)}&fund=${encodeURIComponent(currentFund)}`);
   const data = res.ok ? await res.json() : {};
   if (data && data.id) {
+    currentRecordId = data.id;
     document.getElementById("f-url").value = data.portal_url || "";
     document.getElementById("f-username").value = data.portal_username || "";
     document.getElementById("f-password").value = data.portal_password || "";
@@ -284,15 +371,15 @@ async function openCell(fundName) {
     const accounts = (data.transfer_accounts && data.transfer_accounts.length) ? data.transfer_accounts.slice() : [];
     while (accounts.length < MIN_ACCOUNTS) accounts.push("");
     renderAccountRows(accounts);
+    toggleAttachmentsSection();
+    loadAttachments(currentRecordId);
     document.getElementById("form-status").textContent = "";
   } else {
     document.getElementById("form-status").textContent = "";
   }
 }
 
-async function saveCell() {
-  const statusEl = document.getElementById("form-status");
-  statusEl.textContent = "שומר...";
+async function doSaveCell() {
   const payload = {
     company: currentCompany,
     fund: currentFund,
@@ -306,11 +393,21 @@ async function saveCell() {
   const res = await fetch("/api/pension/cell", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
   });
-  if (res.ok) {
+  if (!res.ok) return null;
+  const result = await res.json();
+  return result.id;
+}
+
+async function saveCell() {
+  const statusEl = document.getElementById("form-status");
+  statusEl.textContent = "שומר...";
+  const id = await doSaveCell();
+  if (id) {
+    currentRecordId = id;
     statusEl.textContent = "נשמר.";
     setTimeout(() => showFunds(), 500);
   } else {
-    statusEl.textContent = "שגיאה: " + (await res.text());
+    statusEl.textContent = "שגיאה בשמירה.";
   }
 }
 
