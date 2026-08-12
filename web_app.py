@@ -1,4 +1,3 @@
-
 """
 Standalone web page (no WhatsApp/Meta/Telegram needed) that looks like a
 WhatsApp chat and generates HR documents for א.ב.ת. שירותי שטיפה:
@@ -22,7 +21,8 @@ import threading
 import time
 from urllib.parse import quote
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, UploadFile, File
+from typing import List
 from fastapi.responses import HTMLResponse, Response, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -441,6 +441,68 @@ async def pension_cell_save(request: Request):
     except Exception as e:  # noqa: BLE001
         return Response(f"Error saving record: {e}", status_code=500)
     return {"status": "saved", "id": record_id}
+
+
+@app.get("/api/pension/attachments/{record_id}")
+def pension_attachments_list(record_id: int, request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        return pension_store.list_attachments(record_id)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error loading attachments: {e}", status_code=500)
+
+
+@app.post("/api/pension/attachments/{record_id}")
+async def pension_attachments_upload(record_id: int, request: Request, files: List[UploadFile] = File(...)):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        uploaded = []
+        for f in files:
+            data = await f.read()
+            if not data:
+                continue
+            att_id = pension_store.add_attachment(record_id, f.filename, f.content_type, data)
+            uploaded.append(att_id)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error uploading attachment: {e}", status_code=500)
+    return {"status": "uploaded", "ids": uploaded}
+
+
+@app.get("/api/pension/attachment/{attachment_id}")
+def pension_attachment_download(attachment_id: int, request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    att = pension_store.get_attachment(attachment_id)
+    if not att:
+        return Response("Not found", status_code=404)
+    ascii_filename = re.sub(r"[^\x20-\x7E]", "_", att["filename"] or "attachment.pdf")
+    utf8_filename = quote(att["filename"] or "attachment.pdf")
+    return Response(
+        content=att["file_data"],
+        media_type=att["content_type"] or "application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'inline; filename="{ascii_filename}"; filename*=UTF-8\'\'{utf8_filename}'
+            )
+        },
+    )
+
+
+@app.post("/api/pension/attachment/delete/{attachment_id}")
+def pension_attachment_delete(attachment_id: int, request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        pension_store.delete_attachment(attachment_id)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error deleting attachment: {e}", status_code=500)
+    return {"status": "deleted"}
 
 
 @app.get("/api/inventory/list")
