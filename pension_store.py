@@ -66,6 +66,20 @@ def init_db():
             cur.execute("ALTER TABLE pension_records ALTER COLUMN employee_name DROP NOT NULL;")
             # Table may predate the transfer-accounts field too.
             cur.execute("ALTER TABLE pension_records ADD COLUMN IF NOT EXISTS transfer_accounts JSONB;")
+
+            # PDF attachments for the "יש בעיה / חוב" flag -- e.g. a debt
+            # notice from the fund. Stored as bytes directly in Postgres
+            # (small internal tool, no need for a separate file store).
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS pension_attachments (
+                    id SERIAL PRIMARY KEY,
+                    record_id INTEGER NOT NULL REFERENCES pension_records(id) ON DELETE CASCADE,
+                    filename TEXT NOT NULL,
+                    content_type TEXT,
+                    file_data BYTEA NOT NULL,
+                    uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                );
+            """)
         conn.commit()
 
 
@@ -242,6 +256,54 @@ def upsert_record(company_name: str, fund_name: str, fields: dict) -> int:
                 new_id = cur.fetchone()[0]
                 conn.commit()
                 return new_id
+
+
+def list_attachments(record_id: int) -> list:
+    """Metadata only (no file bytes) -- used to render the attachment list
+    in the review UI without pulling whole PDFs over the wire."""
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, filename, content_type, uploaded_at FROM pension_attachments "
+                "WHERE record_id=%s ORDER BY uploaded_at ASC",
+                (record_id,),
+            )
+            return [dict(r) for r in cur.fetchall()]
+
+
+def add_attachment(record_id: int, filename: str, content_type: str, data: bytes) -> int:
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO pension_attachments (record_id, filename, content_type, file_data)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
+            """, (record_id, filename, content_type, psycopg2.Binary(data)))
+            new_id = cur.fetchone()[0]
+        conn.commit()
+    return new_id
+
+
+def get_attachment(attachment_id: int) -> dict:
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, filename, content_type, file_data FROM pension_attachments WHERE id=%s",
+                (attachment_id,),
+            )
+            row = cur.fetchone()
+    if not row:
+        return None
+    row = dict(row)
+    row["file_data"] = bytes(row["file_data"])
+    return row
+
+
+def delete_attachment(attachment_id: int):
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM pension_attachments WHERE id=%s", (attachment_id,))
+        conn.commit()
 
 
 def delete_record(record_id: int):
