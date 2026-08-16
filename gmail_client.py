@@ -46,6 +46,8 @@ SUPPLIER_DOMAINS = [
     "emi-1.com",
     "moshaev-inv.com",
     "oz-b-g.com",
+    "pavilion-spark.co.il",
+    "victoriascent.co.il",
 ]
 
 
