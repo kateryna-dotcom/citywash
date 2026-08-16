@@ -1,3 +1,4 @@
+
 """
 Ties gmail_client + invoice_store together: finds new supplier invoice
 emails, downloads the PDF, extracts its text, parses out the branch name,
@@ -202,11 +203,78 @@ def parse_hadarrosen(text: str) -> list:
     return items
 
 
+# pavilion-spark.co.il ("ביתן ספארק סחר בע"מ" -- Priority-software invoices):
+# one line per item -- "<total> שח<net_price> <discount>% שח<gross_price>
+# יח<qty><description><מק"ט/sku> <document ref> <row#>". Reconciles as
+# qty * net_price == total (net_price already has the discount applied).
+_PAVILION_ROW_RE = re.compile(
+    r'(?P<total>[\d,]+\.\d{2})\s*שח'
+    r'(?P<net_price>[\d,]+\.\d{2})\s*'
+    r'(?P<discount>[\d,]+\.\d{2})%\)?\s*שח'
+    r'(?P<gross_price>[\d,]+\.\d{2})\s*יח'
+    r'(?P<qty>\d+)\s*'
+    r'(?P<desc>.*?)'
+    r'(?P<sku>[A-Za-z0-9][A-Za-z0-9\-]{2,})\s+SH\d+\s+\d+\s*$',
+    re.MULTILINE,
+)
+_PAVILION_INVOICE_RE = re.compile(r'SI\d{6,}')
+
+
+def parse_pavilion_spark(text: str) -> list:
+    items = []
+    for m in _PAVILION_ROW_RE.finditer(text):
+        qty, net, total = _num(m.group("qty")), _num(m.group("net_price")), _num(m.group("total"))
+        confident = None not in (qty, net, total) and abs(round(qty * net, 2) - total) < 0.5
+        items.append({
+            "sku": m.group("sku"), "description": m.group("desc").strip(),
+            "quantity": qty, "unit_price": net, "total": total, "confident": confident,
+        })
+    return items
+
+
+# victoriascent.co.il ("ויקטוריה מוצרי ריח בע"מ" -- also חשבשבת, but a clean
+# single-line-per-item layout unlike moshaev/oz-b-g): "<name, may wrap to a
+# second line><qty.XX><price.XXX>ש"ח<discount.XX><total.XX> <13-digit
+# barcode>". Bounded between the "בר קוד" column header and the "סה"כ<digit>"
+# summary line so the header/footer text never gets mistaken for a row.
+_VICTORIA_ROW_RE = re.compile(
+    r'(?P<name>.+?)'
+    r'(?P<qty>-?\d+\.\d{2})'
+    r'(?P<price>\d+\.\d{3})'
+    r'ש"ח'
+    r'(?P<discount>\d+\.\d{2})'
+    r'(?P<total>\d+\.\d{2})\s*'
+    r'(?P<barcode>\d{12,13})',
+    re.DOTALL,
+)
+
+
+def parse_victoria_scent(text: str) -> list:
+    start_marker = "בר קוד"
+    start_idx = text.find(start_marker)
+    start = start_idx + len(start_marker) if start_idx != -1 else 0
+    end_m = re.search(r'סה"כ\d', text[start:])
+    end = start + end_m.start() if end_m else len(text)
+    section = text[start:end]
+
+    items = []
+    for m in _VICTORIA_ROW_RE.finditer(section):
+        qty, price, total = _num(m.group("qty")), _num(m.group("price")), _num(m.group("total"))
+        confident = None not in (qty, price, total) and abs(round(abs(qty) * price, 2) - total) < 0.5
+        items.append({
+            "sku": m.group("barcode"), "description": m.group("name").strip().replace("\n", " "),
+            "quantity": qty, "unit_price": price, "total": total, "confident": confident,
+        })
+    return items
+
+
 _LINE_ITEM_PARSERS = {
     "emi-1.com": parse_emi,
     "moshaev-inv.com": parse_moshaev,
     "oz-b-g.com": parse_oz_bat_galim,
     "hadarrosen.com": parse_hadarrosen,
+    "pavilion-spark.co.il": parse_pavilion_spark,
+    "victoriascent.co.il": parse_victoria_scent,
 }
 
 
@@ -247,6 +315,12 @@ def _guess_invoice_number(subject: str, text: str) -> str:
         m = _INVOICE_NUMBER_RE.search(source)
         if m:
             return m.group(1).strip()
+        # pavilion-spark (Priority software) prints the invoice number as
+        # "SI<digits>" with no "חשבונית מס" label nearby it in the
+        # extracted text order -- catch it as a fallback.
+        m = _PAVILION_INVOICE_RE.search(source)
+        if m:
+            return m.group(0)
     return ""
 
 
