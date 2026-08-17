@@ -241,7 +241,7 @@ def _extract_pdf_text_layout(pdf_bytes: bytes) -> str:
         # Strip bidi embedding/mark control chars (LRM/RLM/LRE/RLE/PDF/
         # LRI/RLI/FSI/PDI) that pdftotext wraps RTL runs in -- invisible
         # but break substring/regex matching otherwise.
-        return re.sub(r"[‎‏‪-‮⁦-⁩]", "", text)
+        return re.sub(r"[\u200e\u200f\u202a-\u202e\u2066-\u2069]", "", text)
     except Exception:  # noqa: BLE001
         return ""
 
