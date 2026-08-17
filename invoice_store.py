@@ -117,6 +117,21 @@ def get_record(record_id: int) -> dict:
     return dict(row) if row else None
 
 
+def update_line_items(record_id: int, line_items: list):
+    """Full replace of an invoice's line_items -- used after re-running the
+    parser against the already-stored raw_text (e.g. following a parser
+    bug fix), so she doesn't have to wait for a fresh Gmail fetch."""
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE invoice_records SET line_items=%s, "
+                "status = CASE WHEN status = 'no_pdf_found' THEN status ELSE 'needs_review' END, "
+                "updated_at=now() WHERE id=%s",
+                (psycopg2.extras.Json(line_items) if line_items is not None else None, record_id),
+            )
+        conn.commit()
+
+
 def update_line_item(record_id: int, item_index: int, updates: dict):
     """Merges `updates` into line_items[item_index] for one invoice record
     (used e.g. to mark a low-confidence / price-mismatch item as resolved
