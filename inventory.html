@@ -79,7 +79,18 @@
   }
   .branch-picker.unset { border-color: var(--red); color: var(--red); }
   .empty { text-align: center; color: #5b7186; padding: 60px 20px; }
+  .catalog-sync {
+    background: #fff; border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 14px; margin-bottom: 14px; display: flex; align-items: center;
+    gap: 10px; flex-wrap: wrap; font-size: 13px;
+  }
+  .catalog-sync .status { color: #5b7186; }
+  .catalog-sync input[type=file] { font-size: 12.5px; max-width: 220px; }
+  .catalog-sync .sync-msg { font-size: 12.5px; }
+  .catalog-sync .sync-msg.ok { color: var(--green); }
+  .catalog-sync .sync-msg.err { color: var(--red); }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
   <div class="top">
@@ -91,6 +102,16 @@
       <button class="btn secondary" onclick="checkNow()">🔄 בדוק עכשיו</button>
       <span id="statusMsg" class="status-msg"></span>
     </div>
+  </div>
+
+  <div class="catalog-sync">
+    <strong>קטלוג מוצרים (Cash On Tab):</strong>
+    <span class="status" id="catalogStatus">טוען...</span>
+    <label class="btn small secondary" style="cursor:pointer;">
+      📤 עדכון קטלוג
+      <input type="file" id="catalogFile" accept=".xlsx" style="display:none" onchange="syncCatalogFile(this.files[0])">
+    </label>
+    <span class="sync-msg" id="catalogSyncMsg"></span>
   </div>
   <div id="cards" class="cards"></div>
   <div id="emptyMsg" class="empty" style="display:none">אין עדיין חשבוניות. לחצי על "בדוק עכשיו" כדי לבדוק את המייל.</div>
@@ -238,7 +259,7 @@ function matchResolveInput(recordId, idx) {
   `;
 }
 
-async function matchItemBarcode(recordId, idx, cellId) {
+async function matchItemBarcode(recordId, idx, cellId, force) {
   const input = document.getElementById(`${cellId}-input`);
   const errEl = document.getElementById(`${cellId}-err`);
   const barcode = (input.value || "").trim();
@@ -246,10 +267,17 @@ async function matchItemBarcode(recordId, idx, cellId) {
   if (!barcode) { errEl.textContent = "הזיני ברקוד"; return; }
   const res = await fetch(`/api/inventory/match-item/${recordId}/${idx}`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "matched", barcode }),
+    body: JSON.stringify({ action: "matched", barcode, force: !!force }),
   });
-  if (res.ok) { loadRecords(); }
-  else { errEl.textContent = await res.text(); }
+  if (res.ok) { loadRecords(); return; }
+  if (res.status === 409) {
+    // Not in the catalogue snapshot -- offer to save anyway (e.g. a
+    // product she just added directly in Cash On Tab).
+    const msg = await res.text();
+    errEl.innerHTML = `${escapeHtml(msg)} <button class="btn tiny" onclick="matchItemBarcode(${recordId}, ${idx}, '${cellId}', true)">שמור בכל זאת</button>`;
+    return;
+  }
+  errEl.textContent = await res.text();
 }
 
 async function skipItemMatch(recordId, idx, cellId) {
@@ -297,8 +325,76 @@ async function checkNow() {
   await loadRecords();
 }
 
+// Expected Cash On Tab export headers (same as her original Items.xlsx).
+const CATALOG_HEADERS = { code: "קוד פריט", barcode: "ברקוד פריט", name: "שם פריט", active: "פעיל" };
+
+async function loadCatalogStatus() {
+  const el = document.getElementById("catalogStatus");
+  try {
+    const res = await fetch("/api/inventory/catalog-status");
+    if (!res.ok) { el.textContent = "שגיאה בטעינת סטטוס"; return; }
+    const s = await res.json();
+    const when = s.last_synced_at ? new Date(s.last_synced_at).toLocaleString("he-IL") : null;
+    el.textContent = s.synced_from_db
+      ? `${s.item_count} מוצרים · עודכן לאחרונה: ${when}`
+      : `${s.item_count} מוצרים · מהקובץ המקורי (עדיין לא סונכרן דרך הכפתור)`;
+  } catch (e) {
+    el.textContent = "שגיאה בטעינת סטטוס";
+  }
+}
+
+function syncCatalogFile(file) {
+  const msgEl = document.getElementById("catalogSyncMsg");
+  if (!file) return;
+  msgEl.className = "sync-msg";
+  msgEl.textContent = "קורא קובץ...";
+
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    try {
+      const wb = XLSX.read(e.target.result, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+      const items = rows.map(r => ({
+        code: String(r[CATALOG_HEADERS.code] ?? "").trim(),
+        barcode: String(r[CATALOG_HEADERS.barcode] ?? "").trim(),
+        name: String(r[CATALOG_HEADERS.name] ?? "").trim(),
+        active: r[CATALOG_HEADERS.active] === false ? false : true,
+      })).filter(it => it.code && it.name);
+
+      if (!items.length) {
+        msgEl.className = "sync-msg err";
+        msgEl.textContent = 'לא נמצאו שורות תקינות — ודאי שהעמודות הן "קוד פריט"/"ברקוד פריט"/"שם פריט"/"פעיל".';
+        return;
+      }
+
+      msgEl.textContent = `מעדכן ${items.length} מוצרים...`;
+      const res = await fetch("/api/inventory/sync-catalog", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      if (!res.ok) {
+        msgEl.className = "sync-msg err";
+        msgEl.textContent = "שגיאה: " + (await res.text());
+        return;
+      }
+      const result = await res.json();
+      msgEl.className = "sync-msg ok";
+      msgEl.textContent = `✓ עודכנו ${result.item_count} מוצרים`;
+      loadCatalogStatus();
+    } catch (err) {
+      msgEl.className = "sync-msg err";
+      msgEl.textContent = "שגיאה בקריאת הקובץ: " + err.message;
+    } finally {
+      document.getElementById("catalogFile").value = "";
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
 loadBranchOptions().then(loadRecords);
 loadBranches();
+loadCatalogStatus();
 </script>
 </body>
 </html>
