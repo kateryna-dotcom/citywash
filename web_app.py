@@ -43,6 +43,7 @@ import invoice_store
 import invoice_ingest
 import item_matcher
 import item_mapping_store
+import catalog_store
 
 # doc_type keys that support the "send for SMS signature" option -- each of
 # these templates has an invisible marker (§) placed at the signature spot.
@@ -102,6 +103,11 @@ def _startup():
         item_mapping_store.init_db()
     except Exception as e:  # noqa: BLE001
         print(f"[startup] item_mapping_store.init_db() skipped: {e}")
+
+    try:
+        catalog_store.init_db()
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] catalog_store.init_db() skipped: {e}")
 
     # Background polling for new supplier invoices -- runs regardless of
     # whether anyone has the dashboard open. If GMAIL_* env vars aren't set
@@ -599,6 +605,11 @@ async def inventory_match_item(record_id: int, item_index: int, request: Request
     payload = await request.json()
     action = payload.get("action")
     barcode = (payload.get("barcode") or "").strip()
+    # True when she's confirming a product that isn't in our catalogue
+    # snapshot at all (e.g. she just added it in Cash On Tab directly --
+    # our cashontab_catalog.json is a point-in-time export of Items.xlsx
+    # and doesn't see that until she re-sends an updated export).
+    force = bool(payload.get("force"))
 
     record = invoice_store.get_record(record_id)
     if not record:
@@ -628,22 +639,75 @@ async def inventory_match_item(record_id: int, item_index: int, request: Request
             if not barcode:
                 return Response("barcode is required for action=matched", status_code=400)
             item = item_matcher.lookup(barcode)
-            if not item:
-                return Response(f'הברקוד "{barcode}" לא נמצא בקטלוג Cash On Tab', status_code=400)
+            if not item and not force:
+                # Doesn't exist in the catalogue snapshot -- ask her to
+                # confirm it's a genuinely new product (not a typo) before
+                # saving a mapping we can't verify against anything.
+                return Response(
+                    f'הברקוד "{barcode}" לא נמצא בקטלוג השמור (יתכן שהוספת את המוצר ישירות ב-Cash On Tab '
+                    'ועדיין לא עדכנת אותי בקובץ מוצרים חדש) — אם זה נכון, לחצי "שמור בכל זאת".',
+                    status_code=409,
+                )
+            catalog_code = item["code"] if item else barcode
+            catalog_name = item["name"] if item else (line_item.get("description") or barcode)
             item_mapping_store.upsert_mapping(
                 supplier_domain, sku, "matched",
-                catalog_code=item["code"], catalog_name=item["name"],
+                catalog_code=catalog_code, catalog_name=catalog_name,
+                notes=None if item else "force-saved: not in the cashontab_catalog.json snapshot at save time",
             )
             invoice_store.update_line_item(record_id, item_index, {
                 "match_source": "matched", "needs_confirmation": False,
-                "matched_code": item["code"], "matched_barcode": item.get("barcode"),
-                "matched_name": item["name"],
+                "matched_code": catalog_code, "matched_barcode": item.get("barcode") if item else barcode,
+                "matched_name": catalog_name,
             })
-            return {"status": "updated", "match_source": "matched", "matched_name": item["name"]}
+            return {"status": "updated", "match_source": "matched", "matched_name": catalog_name}
 
         return Response('action must be "matched" or "skip"', status_code=400)
     except Exception as e:  # noqa: BLE001
         return Response(f"Error resolving item: {e}", status_code=500)
+
+
+@app.get("/api/inventory/catalog-status")
+def inventory_catalog_status(request: Request):
+    """Shows when the catalogue was last synced from Cash On Tab, and how
+    many products are loaded -- so the review UI can show her whether her
+    latest export has actually been picked up."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        rows = catalog_store.get_catalog()
+        synced_at = catalog_store.last_synced_at()
+        return {
+            "synced_from_db": bool(rows),
+            "item_count": len(rows) if rows else item_matcher.catalog_size(),
+            "last_synced_at": synced_at.isoformat() if synced_at else None,
+        }
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error reading catalog status: {e}", status_code=500)
+
+
+@app.post("/api/inventory/sync-catalog")
+async def inventory_sync_catalog(request: Request):
+    """Live catalogue refresh -- replaces the whole product list in one
+    shot and makes it effective immediately (no redeploy). Body:
+    {"items": [{"code", "barcode", "name", "active"}, ...]}. Used after
+    Kateryna re-exports the product list from her own logged-in Cash On
+    Tab session (via Claude in Chrome reading the export, or by her
+    uploading a fresh Items.xlsx that gets converted to this shape)."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    payload = await request.json()
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        return Response("Body must include a non-empty 'items' list", status_code=400)
+    try:
+        count = catalog_store.replace_catalog(items)
+        item_matcher.reload()
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error syncing catalog: {e}", status_code=500)
+    return {"status": "synced", "item_count": count}
 
 
 @app.post("/api/inventory/mark/{record_id}")
