@@ -1,4 +1,3 @@
-
 """
 Standalone web page (no WhatsApp/Meta/Telegram needed) that looks like a
 WhatsApp chat and generates HR documents for א.ב.ת. שירותי שטיפה:
