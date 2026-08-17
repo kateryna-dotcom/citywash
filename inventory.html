@@ -191,7 +191,10 @@ async function loadRecords() {
         </tbody>
       </table>
       ${anyLowConf ? `<div style="margin-top:6px;color:var(--red);font-size:12.5px;">🔴 = הסכום (כמות × מחיר) לא תואם את הסכום בחשבונית — הפריט עדיין יוזן, בדוק/י את הסכום ולחצ/י "תיקנתי".</div>` : ""}
-      ` : `<div style="margin-top:8px;color:#5b7186;font-size:13px;">לא זוהו פריטים אוטומטית — ראה/י טקסט מקורי.</div>`;
+      ` : `<div style="margin-top:8px;color:#5b7186;font-size:13px;">
+          לא זוהו פריטים אוטומטית — ראה/י טקסט מקורי.
+          <button class="toggle-raw" onclick="event.stopPropagation(); reparseInvoice(${r.id})" id="reparse-${r.id}">🔄 פרש מחדש</button>
+        </div>`;
     div.innerHTML = `
       <div class="card-top" onclick="toggleRaw(${r.id})">
         <div class="card-title-wrap">
@@ -309,6 +312,14 @@ async function markOk(id) {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "ok" }),
   });
   if (res.ok) loadRecords();
+}
+
+async function reparseInvoice(id) {
+  const btn = document.getElementById(`reparse-${id}`);
+  if (btn) btn.textContent = "מפרש...";
+  const res = await fetch(`/api/inventory/reparse/${id}`, { method: "POST" });
+  if (res.ok) { loadRecords(); }
+  else { if (btn) btn.textContent = "שגיאה: " + (await res.text()); }
 }
 
 async function checkNow() {
