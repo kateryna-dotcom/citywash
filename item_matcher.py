@@ -48,11 +48,11 @@ def _normalize(s: str) -> str:
 
 # Invisible Unicode bidi-control marks (LRM/RLM/LRE/RLE/PDF/LRI/RLI/FSI/PDI)
 # that pypdf sometimes leaves stuck to a token when extracting text next to
-# Hebrew -- invisible on screen, but they break exact string equality, e.g.
-# "CW010010" straight from the catalogue vs. "‎CW010010" straight off
-# a PDF look identical but aren't ==. Strip them (and stray whitespace)
+# Hebrew -- invisible on screen, but they break exact string equality: a
+# barcode straight from the catalogue vs. the same barcode straight off a
+# PDF can look identical yet not be ==. Strip them (and stray whitespace)
 # before ever comparing a barcode/code against the catalogue.
-_BIDI_MARKS_RE = re.compile("[‎‏‪-‮⁦-⁩]")
+_BIDI_MARKS_RE = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 
 
 def _clean_key(s: str) -> str:
