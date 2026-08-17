@@ -62,6 +62,7 @@ DASHBOARD_HTML_PATH = os.path.join(BASE_DIR, "dashboard.html")
 LOGIN_HTML_PATH = os.path.join(BASE_DIR, "login.html")
 PENSION_HTML_PATH = os.path.join(BASE_DIR, "pension.html")
 INVENTORY_HTML_PATH = os.path.join(BASE_DIR, "inventory.html")
+MAPPINGS_HTML_PATH = os.path.join(BASE_DIR, "mappings.html")
 
 # How often the background thread checks Gmail for new supplier invoices.
 INVOICE_POLL_INTERVAL_SECONDS = 15 * 60
@@ -244,6 +245,15 @@ def inventory_page(request: Request):
     if redirect:
         return redirect
     with open(INVENTORY_HTML_PATH, encoding="utf-8") as f:
+        return f.read()
+
+
+@app.get("/mappings", response_class=HTMLResponse)
+def mappings_page(request: Request):
+    redirect = _require_page_auth(request)
+    if redirect:
+        return redirect
+    with open(MAPPINGS_HTML_PATH, encoding="utf-8") as f:
         return f.read()
 
 
@@ -748,6 +758,62 @@ async def inventory_sync_catalog(request: Request):
     except Exception as e:  # noqa: BLE001
         return Response(f"Error syncing catalog: {e}", status_code=500)
     return {"status": "synced", "item_count": count}
+
+
+@app.get("/api/mappings/list")
+def mappings_list(request: Request):
+    """All confirmed supplier-sku -> Cash On Tab mappings, for the review
+    page -- lets Kateryna see/fix/delete a learned match without having to
+    wait for it to show up on a new invoice again."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        return item_mapping_store.list_mappings()
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error loading mappings: {e}", status_code=500)
+
+
+@app.post("/api/mappings/update/{mapping_id}")
+async def mappings_update(mapping_id: int, request: Request):
+    """Edits an existing mapping in place (e.g. fixing a wrong catalog_code,
+    or switching a row between matched/skip/new_pending). Body:
+    {"action", "catalog_code", "catalog_name", "notes"}."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    payload = await request.json()
+    action = payload.get("action")
+    if action not in ("matched", "skip", "new_pending"):
+        return Response('action must be "matched", "skip" or "new_pending"', status_code=400)
+    catalog_code = (payload.get("catalog_code") or "").strip() or None
+    catalog_name = (payload.get("catalog_name") or "").strip() or None
+    notes = (payload.get("notes") or "").strip() or None
+    if action == "matched" and not catalog_code:
+        return Response("catalog_code is required when action is \"matched\"", status_code=400)
+    try:
+        updated = item_mapping_store.update_mapping_by_id(
+            mapping_id, action, catalog_code=catalog_code, catalog_name=catalog_name, notes=notes,
+        )
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error updating mapping: {e}", status_code=500)
+    if not updated:
+        return Response("Mapping not found", status_code=404)
+    return {"status": "updated"}
+
+
+@app.post("/api/mappings/delete/{mapping_id}")
+def mappings_delete(mapping_id: int, request: Request):
+    """Removes a learned mapping entirely -- the next invoice with this
+    supplier sku will go back to being flagged for review from scratch."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        item_mapping_store.delete_mapping(mapping_id)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error deleting mapping: {e}", status_code=500)
+    return {"status": "deleted"}
 
 
 @app.post("/api/inventory/mark/{record_id}")
