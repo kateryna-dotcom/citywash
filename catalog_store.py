@@ -71,17 +71,26 @@ def replace_catalog(items: list) -> int:
     """Wipes and reloads the whole catalogue in one transaction -- used by
     a full sync (she just re-exported the product list from Cash On Tab).
     `items` is a list of {code, barcode, name, active}. Returns the number
-    of rows loaded."""
-    rows = [
-        (
-            str(it.get("code") or "").strip(),
+    of rows loaded.
+
+    Cash On Tab's own export isn't guaranteed unique on קוד פריט -- some
+    items (e.g. ones added by scanning a barcode with no separate item
+    code assigned) come out with the barcode duplicated into the code
+    column, and two different rows can collide on it. Last row wins for a
+    duplicate code rather than failing the whole sync."""
+    deduped = {}
+    for it in items:
+        code = str(it.get("code") or "").strip()
+        name = str(it.get("name") or "").strip()
+        if not code or not name:
+            continue
+        deduped[code] = (
+            code,
             str(it.get("barcode") or "").strip() or None,
-            str(it.get("name") or "").strip(),
+            name,
             bool(it.get("active", True)),
         )
-        for it in items
-        if str(it.get("code") or "").strip() and str(it.get("name") or "").strip()
-    ]
+    rows = list(deduped.values())
     with _get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM cashontab_catalog")
