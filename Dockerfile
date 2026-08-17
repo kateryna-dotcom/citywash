@@ -15,7 +15,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY contract_filler.py web_app.py chat_ui.html esign.py pension_store.py pension_companies.py dashboard.html login.html pension.html ./
-COPY gmail_client.py invoice_store.py invoice_ingest.py inventory.html branches.py suppliers.py ./
+COPY gmail_client.py invoice_store.py invoice_ingest.py inventory.html mappings.html branches.py suppliers.py ./
 COPY item_matcher.py item_mapping_store.py catalog_store.py cashontab_catalog.json ./
 COPY employment_contract_template_ABT.docx employment_contract_template_worker.docx template_piturim.docx template_shimua.docx template_ishur_haaskaa.docx template_betichut.docx template_incident_notice.docx ./
 
