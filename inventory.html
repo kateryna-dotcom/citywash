@@ -59,6 +59,19 @@
   .items-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
   .items-table tr.low-confidence td { background: var(--red-light); }
   .items-table .num { direction: ltr; text-align: left; }
+  .match-badge { font-size: 11.5px; padding: 2px 8px; border-radius: 12px; font-weight: 600; white-space: nowrap; display: inline-block; }
+  .match-badge.ok { background: var(--green-light); color: var(--green); }
+  .match-badge.warn { background: #fff4e0; color: #a86a00; }
+  .match-badge.bad { background: var(--red-light); color: var(--red); }
+  .match-badge.skip { background: #eee; color: #777; }
+  .match-resolve { display: flex; gap: 4px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
+  .match-resolve input {
+    width: 120px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 5px;
+    font-size: 12px; font-family: inherit; direction: ltr; text-align: left;
+  }
+  .match-resolve .btn.tiny { padding: 3px 9px; font-size: 11.5px; border-radius: 5px; }
+  .match-resolve .btn.tiny.skip-btn { background: #fff; color: var(--red); border: 1px solid var(--red); }
+  .match-err { color: var(--red); font-size: 11px; margin-top: 2px; }
   .card-actions { margin-top: 10px; display: flex; gap: 8px; align-items: center; }
   .branch-picker {
     padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px;
@@ -138,7 +151,7 @@ async function loadRecords() {
     const anyLowConf = items.some(it => it.confident === false && !it.resolved);
     const itemsTable = items.length ? `
       <table class="items-table">
-        <thead><tr><th></th><th>פריט / ברקוד</th><th>תיאור</th><th>כמות</th><th>מחיר יח'</th><th>סה"כ</th><th></th></tr></thead>
+        <thead><tr><th></th><th>פריט / ברקוד</th><th>תיאור</th><th>כמות</th><th>מחיר יח'</th><th>סה"כ</th><th>התאמה למלАי</th><th></th></tr></thead>
         <tbody>
           ${items.map((it, idx) => {
             const flagged = it.confident === false && !it.resolved;
@@ -150,6 +163,7 @@ async function loadRecords() {
               <td class="num">${it.quantity ?? ""}</td>
               <td class="num">${it.unit_price ?? ""}</td>
               <td class="num">${it.total ?? ""}</td>
+              <td>${matchCell(r.id, idx, it)}</td>
               <td>${flagged ? `<button class="toggle-raw" onclick="event.stopPropagation(); resolveItem(${r.id}, ${idx})">✓ תיקנתי</button>` : ""}</td>
             </tr>`;
           }).join("")}
@@ -184,6 +198,67 @@ async function loadRecords() {
     `;
     cardsEl.appendChild(div);
   });
+}
+
+function matchCell(recordId, idx, it) {
+  const src = it.match_source;
+  if (src === "skip") {
+    return `<span class="match-badge skip">לא נכנס למלАי</span>`;
+  }
+  if (src === "matched" || src === "exact" || src === "learned") {
+    return `<span class="match-badge ok">✓ ${escapeHtml(it.matched_name || "")}</span>`;
+  }
+  if (src === "fuzzy" && !it.needs_confirmation) {
+    return `<span class="match-badge ok">✓ ${escapeHtml(it.matched_name || "")}</span>`;
+  }
+  if (src === "new_pending") {
+    return `
+      <span class="match-badge warn">מוצר חדש — להוסיף לקטלוג</span>
+      ${matchResolveInput(recordId, idx)}
+    `;
+  }
+  // fuzzy-but-unsure, or no match at all ("none"/undefined)
+  const guess = it.matched_name ? `<div style="font-size:11.5px;color:#a86a00;">ניחוש: ${escapeHtml(it.matched_name)}</div>` : "";
+  return `
+    <span class="match-badge bad">${src === "fuzzy" ? "לא בטוח" : "לא נמצא"}</span>
+    ${guess}
+    ${matchResolveInput(recordId, idx)}
+  `;
+}
+
+function matchResolveInput(recordId, idx) {
+  const cellId = `match-${recordId}-${idx}`;
+  return `
+    <div class="match-resolve" id="${cellId}" onclick="event.stopPropagation()">
+      <input type="text" placeholder="ברקוד המוצר" id="${cellId}-input">
+      <button class="btn tiny" onclick="matchItemBarcode(${recordId}, ${idx}, '${cellId}')">✓ הזן</button>
+      <button class="btn tiny skip-btn" onclick="skipItemMatch(${recordId}, ${idx}, '${cellId}')">✗ לא להכניס</button>
+    </div>
+    <div class="match-err" id="${cellId}-err"></div>
+  `;
+}
+
+async function matchItemBarcode(recordId, idx, cellId) {
+  const input = document.getElementById(`${cellId}-input`);
+  const errEl = document.getElementById(`${cellId}-err`);
+  const barcode = (input.value || "").trim();
+  errEl.textContent = "";
+  if (!barcode) { errEl.textContent = "הזיני ברקוד"; return; }
+  const res = await fetch(`/api/inventory/match-item/${recordId}/${idx}`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "matched", barcode }),
+  });
+  if (res.ok) { loadRecords(); }
+  else { errEl.textContent = await res.text(); }
+}
+
+async function skipItemMatch(recordId, idx, cellId) {
+  const res = await fetch(`/api/inventory/match-item/${recordId}/${idx}`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "skip" }),
+  });
+  if (res.ok) { loadRecords(); }
+  else { document.getElementById(`${cellId}-err`).textContent = await res.text(); }
 }
 
 function escapeHtml(s) {
