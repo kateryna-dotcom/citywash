@@ -46,6 +46,25 @@ def _normalize(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip().lower()
 
 
+# Invisible Unicode bidi-control marks (LRM/RLM/LRE/RLE/PDF/LRI/RLI/FSI/PDI)
+# that pypdf sometimes leaves stuck to a token when extracting text next to
+# Hebrew -- invisible on screen, but they break exact string equality, e.g.
+# "CW010010" straight from the catalogue vs. "‎CW010010" straight off
+# a PDF look identical but aren't ==. Strip them (and stray whitespace)
+# before ever comparing a barcode/code against the catalogue.
+_BIDI_MARKS_RE = re.compile("[‎‏‪-‮⁦-⁩]")
+
+
+def _clean_key(s: str) -> str:
+    return _BIDI_MARKS_RE.sub("", str(s or "")).strip()
+
+
+# Public alias -- web_app.py uses this to clean a stored line item's sku
+# before using it as an item_mappings key, so a mapping confirmed today
+# still matches the same product on a future invoice.
+clean_key = _clean_key
+
+
 def _load():
     """Loads and indexes the catalogue once per process."""
     global _catalog, _by_barcode, _by_code, _normalized_names
@@ -56,9 +75,9 @@ def _load():
     _by_barcode, _by_code, _normalized_names = {}, {}, []
     for item in _catalog:
         if item.get("barcode"):
-            _by_barcode.setdefault(item["barcode"], item)
+            _by_barcode.setdefault(_clean_key(item["barcode"]), item)
         if item.get("code"):
-            _by_code.setdefault(item["code"], item)
+            _by_code.setdefault(_clean_key(item["code"]), item)
         _normalized_names.append((_normalize(item.get("name")), item))
 
 
@@ -96,6 +115,7 @@ def search_by_name(name: str, limit: int = 5) -> list:
 
 def _exact(key: str):
     _load()
+    key = _clean_key(key)
     if not key:
         return None
     return _by_barcode.get(key) or _by_code.get(key)
@@ -105,7 +125,7 @@ def lookup(key: str) -> dict:
     """Public exact lookup by barcode or catalogue item code -- used when
     Kateryna types/scans a barcode herself to resolve an item the automatic
     matcher couldn't confidently place."""
-    return _exact((key or "").strip())
+    return _exact(key)
 
 
 def match_item(line_item: dict, learned_mapping: dict = None) -> dict:
@@ -121,6 +141,15 @@ def match_item(line_item: dict, learned_mapping: dict = None) -> dict:
         candidates    -- ranked alternatives, for the picker UI
     """
     result = dict(line_item)
+    # PDF text extraction sometimes leaves invisible bidi-control marks
+    # stuck to the sku/barcode token, which look identical on screen but
+    # break exact equality against the (clean) catalogue -- strip them here
+    # so both the matching below and anything stored/displayed downstream
+    # (item_mappings, the review UI) use the clean value.
+    if result.get("sku"):
+        result["sku"] = _clean_key(result["sku"])
+    if result.get("barcode"):
+        result["barcode"] = _clean_key(result["barcode"])
     result.update({
         "matched_code": None, "matched_barcode": None, "matched_name": None,
         "match_source": "none", "needs_confirmation": True, "candidates": [],
@@ -185,6 +214,6 @@ def match_invoice_items(line_items: list, learned_mappings: dict = None) -> list
     learned_mappings = learned_mappings or {}
     out = []
     for line_item in line_items or []:
-        key = line_item.get("sku") or line_item.get("barcode") or ""
+        key = _clean_key(line_item.get("sku") or line_item.get("barcode") or "")
         out.append(match_item(line_item, learned_mappings.get(key)))
     return out
