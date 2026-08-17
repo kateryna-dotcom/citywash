@@ -51,8 +51,25 @@ def _num(s):
 # Per-supplier line-item parsers.
 # ---------------------------------------------------------------------------
 
-# emi-1.com ("אי.אמ.איי מערכות שטיפה לרכב"): one line per item --
-# "<total> ש"ח<unit_price> יח<qty> [unit/extra][description][SKU] <row#>"
+# emi-1.com ("אי.אמ.איי מערכות שטיפה לרכב"): one line per item, columns
+# (right-to-left as printed, so left-to-right in extracted text) total /
+# unit_price ש"ח / qty יח' / description / sku / row#. Matched against
+# pdftotext -layout output -- pypdf's plain extract_text() badly truncates
+# this invoice's wide table (it was dropping half the description, which
+# is why CW010078 used to come through unmatchable against the catalogue).
+_EMI_LAYOUT_ROW_RE = re.compile(
+    r'(?P<total>[\d,]+\.\d{2})\s*'
+    r'(?P<unit_price>[\d,]+\.\d{2})\s*ש"ח\s*'
+    r'(?P<qty>[\d,]+\.\d{2})\s*יח\'\s*'
+    r'(?P<desc>.+?)\s*'
+    r'(?P<sku>[A-Za-z]{1,3}\d{5,})\s+'
+    r'(?P<row_num>\d+)\s*$',
+    re.MULTILINE,
+)
+
+# Legacy pattern, built against pypdf's plain (often-truncated) extraction
+# -- kept as a fallback for when pdf_bytes isn't available (e.g. re-parsing
+# an invoice ingested before this fix) or pdftotext fails for some reason.
 _EMI_ROW_RE = re.compile(
     r'(?P<total>[\d,]+\.\d{2})\s*ש"ח'
     r'(?P<unit_price>[\d,]+\.\d{2})\s*יח'
@@ -63,7 +80,25 @@ _EMI_ROW_RE = re.compile(
 )
 
 
-def parse_emi(text: str) -> list:
+def _parse_emi_layout(text: str) -> list:
+    items = []
+    for m in _EMI_LAYOUT_ROW_RE.finditer(text):
+        qty, unit_price, total = _num(m.group("qty")), _num(m.group("unit_price")), _num(m.group("total"))
+        confident = None not in (qty, unit_price, total) and abs(round(qty * unit_price, 2) - total) < 0.5
+        items.append({
+            "sku": m.group("sku"), "description": m.group("desc").strip(), "quantity": qty,
+            "unit_price": unit_price, "total": total, "confident": confident,
+        })
+    return items
+
+
+def parse_emi(text: str, pdf_bytes: bytes = None) -> list:
+    if pdf_bytes:
+        layout_text = _extract_pdf_text_layout(pdf_bytes)
+        if layout_text:
+            items = _parse_emi_layout(layout_text)
+            if items:
+                return items
     items = []
     for m in _EMI_ROW_RE.finditer(text):
         middle = m.group("middle")
