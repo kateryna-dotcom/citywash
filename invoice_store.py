@@ -44,6 +44,13 @@ def init_db():
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 );
             """)
+            # Original PDF bytes -- lets a parser fix be re-applied to an
+            # already-ingested invoice (via /api/inventory/reparse) without
+            # needing a fresh Gmail fetch, and lets some suppliers'
+            # parsers re-extract with a different method (e.g. pdftotext
+            # -layout for hadarrosen, which keeps table columns pypdf's
+            # plain extract_text() sometimes garbles or drops).
+            cur.execute("ALTER TABLE invoice_records ADD COLUMN IF NOT EXISTS pdf_data BYTEA;")
         conn.commit()
 
 
@@ -60,8 +67,8 @@ def create_record(fields: dict) -> int:
             cur.execute("""
                 INSERT INTO invoice_records
                     (gmail_message_id, supplier_domain, sender_email, subject, received_at,
-                     pdf_filename, raw_text, branch, invoice_number, line_items, status, note)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     pdf_filename, raw_text, branch, invoice_number, line_items, status, note, pdf_data)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (gmail_message_id) DO NOTHING
                 RETURNING id
             """, (
@@ -77,23 +84,44 @@ def create_record(fields: dict) -> int:
                 psycopg2.extras.Json(fields.get("line_items")) if fields.get("line_items") is not None else None,
                 fields.get("status", "needs_review"),
                 fields.get("note"),
+                psycopg2.Binary(fields["pdf_data"]) if fields.get("pdf_data") is not None else None,
             ))
             row = cur.fetchone()
         conn.commit()
     return row[0] if row else None
 
 
+# Columns for list/get -- deliberately excludes pdf_data (can be several
+# hundred KB per row; would bloat every list response and can't be JSON-
+# serialized directly). Use get_pdf_data() to fetch it when actually needed.
+_RECORD_COLUMNS = (
+    "id, gmail_message_id, supplier_domain, sender_email, subject, received_at, "
+    "pdf_filename, raw_text, branch, invoice_number, line_items, status, note, "
+    "created_at, updated_at"
+)
+
+
+def get_pdf_data(record_id: int) -> bytes:
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pdf_data FROM invoice_records WHERE id=%s", (record_id,))
+            row = cur.fetchone()
+    if not row or row[0] is None:
+        return None
+    return bytes(row[0])
+
+
 def list_records(branch: str = None, limit: int = 200) -> list:
     with _get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             if branch:
-                cur.execute("""
-                    SELECT * FROM invoice_records WHERE branch=%s
+                cur.execute(f"""
+                    SELECT {_RECORD_COLUMNS} FROM invoice_records WHERE branch=%s
                     ORDER BY (status = 'needs_review') DESC, received_at DESC LIMIT %s
                 """, (branch, limit))
             else:
-                cur.execute("""
-                    SELECT * FROM invoice_records
+                cur.execute(f"""
+                    SELECT {_RECORD_COLUMNS} FROM invoice_records
                     ORDER BY (status = 'needs_review') DESC, received_at DESC LIMIT %s
                 """, (limit,))
             return [dict(r) for r in cur.fetchall()]
@@ -112,7 +140,7 @@ def list_branches() -> list:
 def get_record(record_id: int) -> dict:
     with _get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT * FROM invoice_records WHERE id=%s", (record_id,))
+            cur.execute(f"SELECT {_RECORD_COLUMNS} FROM invoice_records WHERE id=%s", (record_id,))
             row = cur.fetchone()
     return dict(row) if row else None
 
