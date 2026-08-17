@@ -114,8 +114,61 @@ def parse_emi(text: str, pdf_bytes: bytes = None) -> list:
 
 
 # moshaev-inv.com ("מושייב השקעות" / חשבשבת "HashDoc" PDFs -- also used by
-# oz-b-g.com "עוז בת גלים"): item key line + 1-2 line name, then a line of
-# "<qty><price><discount%><total><13-digit barcode>" with no separators.
+# oz-b-g.com "עוז בת גלים"), matched against pdftotext -layout output:
+# one line per item, columns (right-to-left as printed) barcode / total /
+# discount% / price / qty / name / sku. Name sometimes wraps onto its own
+# following line (e.g. a size like "23KG") which pypdf's plain
+# extract_text() lost entirely -- that's the "695-20 Afb 23KG" item that
+# used to come through with no usable description at all.
+_MOSHAEV_LAYOUT_ROW_RE = re.compile(
+    r'^[ \t]*(?P<barcode>\d{13})\s+'
+    r'(?P<total>[\d,]+\.\d{2})\s+'
+    r'(?P<discount>[\d,]+\.\d{2})\s+'
+    r'(?P<price>[\d,]+\.\d{2})\s+'
+    r'(?P<qty>[\d,]+\.\d{2})\s+'
+    r'(?P<desc>.+?)\s+'
+    r'(?P<sku>[A-Za-z0-9][A-Za-z0-9\-]{3,})[ \t]*$',
+    re.MULTILINE,
+)
+# Lines that mean "this isn't a wrapped description continuation" when
+# peeking at the line right after a matched row.
+_MOSHAEV_NOT_CONTINUATION_RE = re.compile(r'^\s*(\d{13}\s|יתרת|תאריך תשלום|סה"כ)')
+
+
+def _consume_wrapped_continuation(text: str, match_end: int, desc: str) -> str:
+    """Some suppliers' item names wrap onto a lone following line (no
+    numbers, just the rest of the description, e.g. a size like "23KG" or
+    a model name). If the line right after this row match looks like that
+    (not a new data row, not blank, not a totals/footer line), fold it
+    into the description."""
+    after = text[match_end:match_end + 300].split("\n", 2)
+    cont = after[1].strip() if len(after) > 1 else ""
+    if cont and not _MOSHAEV_NOT_CONTINUATION_RE.match(cont):
+        return f"{desc} {cont}".strip()
+    return desc
+
+
+def _parse_moshaev_layout(text: str) -> list:
+    items = []
+    for m in _MOSHAEV_LAYOUT_ROW_RE.finditer(text):
+        qty, price, discount, total = (
+            _num(m.group("qty")), _num(m.group("price")),
+            _num(m.group("discount")), _num(m.group("total")),
+        )
+        expected = round(qty * price * (1 - (discount or 0) / 100), 2) if qty is not None and price is not None else None
+        confident = expected is not None and total is not None and abs(expected - total) < 0.5
+        desc = _consume_wrapped_continuation(text, m.end(), m.group("desc").strip())
+        items.append({
+            "sku": m.group("sku"), "description": desc,
+            "quantity": qty, "unit_price": price, "discount_pct": discount,
+            "total": total, "barcode": m.group("barcode"), "confident": confident,
+        })
+    return items
+
+
+# Legacy line-by-line parser, built against pypdf's plain (often-truncated)
+# extraction -- kept as a fallback for when pdf_bytes isn't available or
+# pdftotext fails.
 _MOSHAEV_NUM_LINE_RE = re.compile(
     r'^(?P<qty>\d+\.\d{2})(?P<price>[\d,]+\.\d{2})(?P<discount>\d+\.\d{2})(?P<total>[\d,]+\.\d{2})(?P<barcode>\d{13})\s*$'
 )
@@ -131,7 +184,13 @@ _MOSHAEV_TRAILING_NUM_RE = re.compile(
 _MOSHAEV_KEY_LINE_RE = re.compile(r'^(?P<key>[A-Za-z0-9][A-Za-z0-9\-]{3,}?)(?P<name_start>[^\d\s].*)$')
 
 
-def parse_moshaev(text: str) -> list:
+def parse_moshaev(text: str, pdf_bytes: bytes = None) -> list:
+    if pdf_bytes:
+        layout_text = _extract_pdf_text_layout(pdf_bytes)
+        if layout_text:
+            items = _parse_moshaev_layout(layout_text)
+            if items:
+                return items
     items = []
     pending_key = None
     pending_name_parts = []
@@ -173,17 +232,72 @@ def parse_moshaev(text: str) -> list:
     return items
 
 
-# oz-b-g.com ("עוז בת גלים") -- also חשבשבת-produced but a different
-# column layout than moshaev-inv.com (no barcode/discount columns): item
-# key spans 1-2 short lines, then "<name><qty.XX><price.XX><total.XX>
-# <serial#>" closes the item.
+# oz-b-g.com ("עוז בת גלים") -- also חשבשבת-produced, matched against
+# pdftotext -layout output. Two sub-templates seen on real invoices,
+# distinguished by whether the header includes a "מס' סיריאלי" column:
+#   no סיריאלי: ship-doc# / total / unit_price / qty / description / sku / row#
+#      (this is the "DE207500500 PowerWringer" template -- its description
+#      used to come through as an unusable fragment under pypdf)
+#   with סיריאלי: ship-doc# / total / unit_price / qty / sku / description / row#
+#      (sku sits before the description instead of after it)
+_OZBG_LAYOUT_ROW_A_RE = re.compile(  # no סיריאלי column
+    r'^[ \t]*(?P<ship>\d+)\s+'
+    r'(?P<total>[\d,]+\.\d{2})\s+'
+    r'(?P<price>[\d,]+\.\d{2})\s+'
+    r'(?P<qty>[\d,]+\.\d{2})\s+'
+    r'(?P<desc>.+?)\s+'
+    r'(?P<sku>[A-Za-z0-9][A-Za-z0-9\-]{3,})\s+'
+    r'(?P<row_num>\d{1,3})[ \t]*$',
+    re.MULTILINE,
+)
+_OZBG_LAYOUT_ROW_B_RE = re.compile(  # with סיריאלי column
+    r'^[ \t]*(?P<ship>\d+)\s+'
+    r'(?P<total>[\d,]+\.\d{2})\s+'
+    r'(?P<price>[\d,]+\.\d{2})\s+'
+    r'(?P<qty>[\d,]+\.\d{2})\s+'
+    r'(?P<sku>[A-Za-z0-9][A-Za-z0-9\-]{4,})\s*'
+    r'(?P<desc>.+?)\s+'
+    r'(?P<row_num>\d{1,3})[ \t]*$',
+    re.MULTILINE,
+)
+_OZBG_NOT_CONTINUATION_RE = re.compile(r'^\s*(\d+\s|סה"כ|האחריות|יש צורך)')
+
+
+def _parse_oz_bg_layout(text: str) -> list:
+    row_re = _OZBG_LAYOUT_ROW_B_RE if "סיריאלי" in text else _OZBG_LAYOUT_ROW_A_RE
+    items = []
+    for m in row_re.finditer(text):
+        qty, price, total = _num(m.group("qty")), _num(m.group("price")), _num(m.group("total"))
+        confident = None not in (qty, price, total) and abs(round(qty * price, 2) - total) < 0.5
+        desc = m.group("desc").strip()
+        after = text[m.end():m.end() + 200].split("\n", 2)
+        cont = after[1].strip() if len(after) > 1 else ""
+        if cont and not _OZBG_NOT_CONTINUATION_RE.match(cont):
+            desc = f"{desc} {cont}".strip()
+        items.append({
+            "sku": m.group("sku"), "description": desc,
+            "quantity": qty, "unit_price": price, "total": total, "confident": confident,
+        })
+    return items
+
+
+# Legacy line-by-line parser, built against pypdf's plain (often-truncated)
+# extraction -- kept as a fallback for when pdf_bytes isn't available or
+# pdftotext fails. Item key spans 1-2 short lines, then
+# "<name><qty.XX><price.XX><total.XX><serial#>" closes the item.
 _OZBG_CLOSE_RE = re.compile(
     r'^(?P<name>[^\d]*?)(?P<qty>\d+\.\d{2})(?P<price>[\d,]+\.\d{2})(?P<total>[\d,]+\.\d{2})\s+(?P<serial>\d+)\s*$'
 )
 _OZBG_HEADER_MARKER = "מפתח פריט"
 
 
-def parse_oz_bat_galim(text: str) -> list:
+def parse_oz_bat_galim(text: str, pdf_bytes: bytes = None) -> list:
+    if pdf_bytes:
+        layout_text = _extract_pdf_text_layout(pdf_bytes)
+        if layout_text:
+            items = _parse_oz_bg_layout(layout_text)
+            if items:
+                return items
     items = []
     key_lines = []
     seen_header = False
