@@ -15,10 +15,12 @@ Run locally:
 Deploy anywhere that runs Docker (Render, Railway, Fly.io, a VPS, ...).
 Requires LibreOffice on the host for the docx -> pdf conversion (see Dockerfile).
 """
+import io
 import os
 import re
 import threading
 import time
+import zipfile
 from urllib.parse import quote
 
 from fastapi import FastAPI, Request, UploadFile, File
@@ -315,6 +317,111 @@ async def generate(request: Request):
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_filename}"; '
+                f"filename*=UTF-8''{utf8_filename}"
+            )
+        },
+    )
+
+
+# doc_type per bulk-row "type" -- worker uses the same contract_worker
+# template/flow as the one-by-one chat, manager uses contract_manager.
+BULK_DOC_TYPE_BY_ROW_TYPE = {"worker": "contract_worker", "manager": "contract_manager"}
+
+# Fields every row needs regardless of type, plus the extra ones only the
+# worker contract template requires (JOB_TITLE, SCHEDULE_TYPE -- the
+# manager template doesn't have those tokens at all).
+_BULK_COMMON_FIELDS = ["EMPLOYEE_NAME", "EMPLOYEE_ID", "STATION_NAME", "START_DATE", "PAY_TYPE", "AMOUNT"]
+_BULK_WORKER_ONLY_FIELDS = ["JOB_TITLE", "SCHEDULE_TYPE"]
+
+
+def _sanitize_filename_part(name: str) -> str:
+    # Keep Hebrew/Latin letters, digits, spaces and a few safe punctuation
+    # marks; drop anything a filesystem/zip reader could choke on.
+    cleaned = re.sub(r'[\\/:*?"<>|]', "", name or "").strip()
+    return cleaned or "עובד"
+
+
+@app.post("/api/bulk-generate")
+async def bulk_generate(request: Request):
+    """Generates a merged (contract + הצהרת בטיחות) PDF for each person in
+    a bulk list -- one company for the whole batch, each row independently
+    typed as a worker or a station manager. Returns a ZIP of all the PDFs
+    for a single download, or a 400 listing exactly which rows are invalid
+    (so she can fix the Excel and re-upload, rather than silently skipping
+    people)."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    payload = await request.json()
+    company_name = (payload.get("company_name") or "").strip()
+    company_id = (payload.get("company_id") or "").strip()
+    people = payload.get("people")
+
+    if not company_name or not company_id:
+        return Response("company_name and company_id are required", status_code=400)
+    if not isinstance(people, list) or not people:
+        return Response("Body must include a non-empty 'people' list", status_code=400)
+
+    errors = []
+    built = []  # [(filename, pdf_bytes), ...]
+    used_filenames = {}
+
+    for i, person in enumerate(people):
+        row_label = person.get("EMPLOYEE_NAME") or f"שורה {i + 1}"
+        row_type = person.get("type")
+        doc_type = BULK_DOC_TYPE_BY_ROW_TYPE.get(row_type)
+        if not doc_type:
+            errors.append(f'{row_label}: סוג לא תקין ("{row_type}") -- חייב להיות עובד או מנהל')
+            continue
+
+        required = list(_BULK_COMMON_FIELDS)
+        if row_type == "worker":
+            required += _BULK_WORKER_ONLY_FIELDS
+        missing = [f for f in required if not str(person.get(f) or "").strip()]
+        if missing:
+            errors.append(f"{row_label}: חסרים שדות ({', '.join(missing)})")
+            continue
+
+        fields = {"COMPANY_NAME": company_name, "COMPANY_ID": company_id}
+        for f in required:
+            fields[f] = person[f]
+
+        try:
+            pdf_bytes = _build_final_pdf(doc_type, dict(fields))
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{row_label}: שגיאה ביצירת המסמך ({e})")
+            continue
+
+        base_name = _sanitize_filename_part(str(person.get("EMPLOYEE_NAME")))
+        filename = f"{base_name}.pdf"
+        if filename in used_filenames:
+            used_filenames[filename] += 1
+            filename = f"{base_name} ({used_filenames[filename]}).pdf"
+        else:
+            used_filenames[filename] = 0
+        built.append((filename, pdf_bytes))
+
+    if errors:
+        return Response(
+            "לא נוצרו מסמכים -- יש לתקן ולהעלות מחדש:\n" + "\n".join(errors),
+            status_code=400,
+        )
+
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for filename, pdf_bytes in built:
+            zf.writestr(filename, pdf_bytes)
+    zip_bytes = zip_buf.getvalue()
+
+    zip_filename = f"חוזים_{company_name}.zip"
+    ascii_filename = re.sub(r"[^\x20-\x7E]", "_", zip_filename)
+    utf8_filename = quote(zip_filename)
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
         headers={
             "Content-Disposition": (
                 f'attachment; filename="{ascii_filename}"; '
