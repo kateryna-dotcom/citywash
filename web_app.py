@@ -608,7 +608,10 @@ async def inventory_match_item(record_id: int, item_index: int, request: Request
         return Response("Item index out of range", status_code=404)
     line_item = items[item_index]
     supplier_domain = record.get("supplier_domain") or ""
-    sku = line_item.get("sku") or line_item.get("barcode") or ""
+    # Clean in case this line item was stored before the bidi-mark fix --
+    # keeps the mapping key consistent with what future (already-clean)
+    # ingests will look up.
+    sku = item_matcher.clean_key(line_item.get("sku") or line_item.get("barcode") or "")
     if not sku:
         return Response("This item has no SKU/barcode to key the mapping on", status_code=400)
 
