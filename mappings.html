@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>התאמות מוצרים</title>
+<style>
+  :root {
+    --blue-dark: #0b4f8a; --blue: #1e6fb8; --blue-light: #eaf3fb;
+    --border: #d9e6f0; --text: #1c2b39; --red: #d92b2b; --red-light: #fdecec;
+    --green: #1a8a4a; --green-light: #eaf9f0; --orange: #a86a00; --orange-light: #fff4e0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
+    background: #f4f8fb; color: var(--text); padding: 22px;
+  }
+  .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; flex-wrap: wrap; gap: 12px; }
+  .top h2 { margin: 0; color: var(--blue-dark); font-size: 19px; }
+  .top-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  select, input[type=text] {
+    padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
+    font-size: 14px; font-family: inherit; background: #fff;
+  }
+  .btn {
+    background: var(--blue); color: #fff; border: none; border-radius: 8px; padding: 9px 16px;
+    font-size: 14px; cursor: pointer; font-weight: 600;
+  }
+  .btn:hover { background: var(--blue-dark); }
+  .btn.secondary { background: #fff; color: var(--blue); border: 1px solid var(--blue); }
+  .btn.danger { background: #fff; color: var(--red); border: 1px solid var(--red); }
+  .btn.small { padding: 6px 12px; font-size: 13px; }
+  .btn.tiny { padding: 3px 10px; font-size: 12px; border-radius: 6px; }
+  .status-msg { font-size: 13px; color: #5b7186; margin-inline-start: 4px; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  thead th {
+    text-align: right; color: #5b7186; font-weight: 600; padding: 10px 12px;
+    border-bottom: 1px solid var(--border); background: var(--blue-light); font-size: 12.5px;
+  }
+  tbody td { padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 13.5px; vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #fafcfe; }
+  .supplier { color: #5b7186; font-size: 12px; }
+  .sku { font-family: monospace; direction: ltr; text-align: left; display: inline-block; }
+  .action-badge { font-size: 11.5px; padding: 3px 10px; border-radius: 12px; font-weight: 600; white-space: nowrap; display: inline-block; }
+  .action-badge.matched { background: var(--green-light); color: var(--green); }
+  .action-badge.skip { background: #eee; color: #777; }
+  .action-badge.new_pending { background: var(--orange-light); color: var(--orange); }
+  .notes { color: #5b7186; font-size: 12px; max-width: 260px; }
+  .row-actions { display: flex; gap: 6px; white-space: nowrap; }
+  .edit-form { display: flex; flex-direction: column; gap: 6px; min-width: 220px; }
+  .edit-form select, .edit-form input { font-size: 12.5px; padding: 4px 7px; }
+  .edit-form textarea {
+    font-size: 12.5px; padding: 4px 7px; border: 1px solid var(--border); border-radius: 6px;
+    font-family: inherit; resize: vertical; min-height: 32px;
+  }
+  .edit-actions { display: flex; gap: 6px; }
+  .match-results { margin-top: 2px; max-width: 260px; position: relative; z-index: 5; }
+  .match-results .result-row {
+    padding: 4px 8px; font-size: 12px; border: 1px solid var(--border); border-top: none;
+    background: #fff; cursor: pointer;
+  }
+  .match-results .result-row:first-child { border-top: 1px solid var(--border); border-radius: 5px 5px 0 0; }
+  .match-results .result-row:last-child { border-radius: 0 0 5px 5px; }
+  .match-results .result-row:hover { background: var(--blue-light); }
+  .match-results .result-code { color: #5b7186; font-size: 11px; direction: ltr; display: inline-block; }
+  .empty { text-align: center; color: #5b7186; padding: 60px 20px; }
+  .count-msg { font-size: 12.5px; color: #5b7186; margin-bottom: 10px; }
+  .save-err { color: var(--red); font-size: 11.5px; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <h2>🔗 התאמות מוצרים שנלמדו</h2>
+    <div class="top-controls">
+      <select id="supplierFilter" onchange="renderTable()">
+        <option value="">כל הספקים</option>
+      </select>
+      <select id="actionFilter" onchange="renderTable()">
+        <option value="">כל הסטטוסים</option>
+        <option value="matched">הותאם</option>
+        <option value="new_pending">ממתין להוספה בקטלוג</option>
+        <option value="skip">לא להכניס למלאי</option>
+      </select>
+      <input type="text" id="searchBox" placeholder="חיפוש לפי מק״ט / שם..." oninput="renderTable()" style="width:200px;">
+      <button class="btn secondary" onclick="loadMappings()">🔄 רענן</button>
+      <span id="statusMsg" class="status-msg"></span>
+    </div>
+  </div>
+
+  <div class="count-msg" id="countMsg"></div>
+  <div id="tableWrap"></div>
+
+<script>
+let ALL_MAPPINGS = [];
+let EDITING_ID = null;
+
+const ACTION_LABELS = { matched: "הותאם", skip: "לא להכניס", new_pending: "ממתין להוספה בקטלוג" };
+
+async function loadMappings() {
+  document.getElementById("statusMsg").textContent = "טוען...";
+  try {
+    const res = await fetch("/api/mappings/list");
+    if (!res.ok) throw new Error(await res.text());
+    ALL_MAPPINGS = await res.json();
+    populateSupplierFilter();
+    renderTable();
+    document.getElementById("statusMsg").textContent = "";
+  } catch (e) {
+    document.getElementById("statusMsg").textContent = "שגיאה בטעינה: " + e.message;
+  }
+}
+
+function populateSupplierFilter() {
+  const sel = document.getElementById("supplierFilter");
+  const current = sel.value;
+  const domains = [...new Set(ALL_MAPPINGS.map(m => m.supplier_domain).filter(Boolean))].sort();
+  sel.innerHTML = '<option value="">כל הספקים</option>' +
+    domains.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join("");
+  sel.value = current;
+}
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function renderTable() {
+  const supplier = document.getElementById("supplierFilter").value;
+  const action = document.getElementById("actionFilter").value;
+  const q = document.getElementById("searchBox").value.trim().toLowerCase();
+
+  let rows = ALL_MAPPINGS;
+  if (supplier) rows = rows.filter(m => m.supplier_domain === supplier);
+  if (action) rows = rows.filter(m => m.action === action);
+  if (q) {
+    rows = rows.filter(m =>
+      (m.supplier_sku || "").toLowerCase().includes(q) ||
+      (m.catalog_name || "").toLowerCase().includes(q) ||
+      (m.catalog_code || "").toLowerCase().includes(q) ||
+      (m.notes || "").toLowerCase().includes(q)
+    );
+  }
+
+  document.getElementById("countMsg").textContent = `מציג ${rows.length} מתוך ${ALL_MAPPINGS.length} התאמות`;
+
+  const wrap = document.getElementById("tableWrap");
+  if (!rows.length) {
+    wrap.innerHTML = '<div class="empty">אין התאמות תואמות לסינון</div>';
+    return;
+  }
+
+  wrap.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>ספק</th>
+          <th>מק"ט ספק</th>
+          <th>סטטוס</th>
+          <th>מוצר בקטלוג</th>
+          <th>הערות</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(rowHtml).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function rowHtml(m) {
+  if (m.id === EDITING_ID) return editRowHtml(m);
+  const badge = `<span class="action-badge ${m.action}">${ACTION_LABELS[m.action] || m.action}</span>`;
+  const catalogCell = m.catalog_code
+    ? `${escapeHtml(m.catalog_name || "")}<br><span class="sku supplier">${escapeHtml(m.catalog_code)}</span>`
+    : '<span class="supplier">—</span>';
+  return `
+    <tr>
+      <td class="supplier">${escapeHtml(m.supplier_domain)}</td>
+      <td class="sku">${escapeHtml(m.supplier_sku)}</td>
+      <td>${badge}</td>
+      <td>${catalogCell}</td>
+      <td class="notes">${escapeHtml(m.notes || "")}</td>
+      <td class="row-actions">
+        <button class="btn tiny secondary" onclick="startEdit(${m.id})">✏️ ערוך</button>
+        <button class="btn tiny danger" onclick="deleteMapping(${m.id})">🗑️ מחק</button>
+      </td>
+    </tr>
+  `;
+}
+
+function editRowHtml(m) {
+  return `
+    <tr>
+      <td class="supplier">${escapeHtml(m.supplier_domain)}</td>
+      <td class="sku">${escapeHtml(m.supplier_sku)}</td>
+      <td colspan="4">
+        <div class="edit-form" id="editForm-${m.id}">
+          <select id="editAction-${m.id}" onchange="onEditActionChange(${m.id})">
+            <option value="matched" ${m.action === "matched" ? "selected" : ""}>הותאם</option>
+            <option value="new_pending" ${m.action === "new_pending" ? "selected" : ""}>ממתין להוספה בקטלוג</option>
+            <option value="skip" ${m.action === "skip" ? "selected" : ""}>לא להכניס למלאי</option>
+          </select>
+          <div id="catalogFields-${m.id}">
+            <input type="text" id="editCode-${m.id}" placeholder="קוד/ברקוד בקטלוג" value="${escapeHtml(m.catalog_code || "")}">
+            <input type="text" id="editName-${m.id}" placeholder="שם המוצר (חיפוש בקטלוג)"
+                   value="${escapeHtml(m.catalog_name || "")}" oninput="searchCatalogDebounced(${m.id})" autocomplete="off">
+            <div class="match-results" id="editResults-${m.id}"></div>
+          </div>
+          <textarea id="editNotes-${m.id}" placeholder="הערות">${escapeHtml(m.notes || "")}</textarea>
+          <div class="edit-actions">
+            <button class="btn tiny" onclick="saveEdit(${m.id})">💾 שמור</button>
+            <button class="btn tiny secondary" onclick="cancelEdit()">ביטול</button>
+          </div>
+          <div class="save-err" id="editErr-${m.id}"></div>
+        </div>
+      </td>
+    </tr>
+  `;
+}
+
+function startEdit(id) {
+  EDITING_ID = id;
+  renderTable();
+  onEditActionChange(id);
+}
+
+function cancelEdit() {
+  EDITING_ID = null;
+  renderTable();
+}
+
+function onEditActionChange(id) {
+  const action = document.getElementById(`editAction-${id}`).value;
+  const fields = document.getElementById(`catalogFields-${id}`);
+  fields.style.display = action === "matched" ? "" : "none";
+}
+
+let searchTimer = null;
+function searchCatalogDebounced(id) {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => runCatalogSearch(id), 300);
+}
+
+async function runCatalogSearch(id) {
+  const q = document.getElementById(`editName-${id}`).value.trim();
+  const resultsEl = document.getElementById(`editResults-${id}`);
+  if (!q || q.length < 2) { resultsEl.innerHTML = ""; return; }
+  try {
+    const res = await fetch("/api/inventory/search-catalog?q=" + encodeURIComponent(q));
+    if (!res.ok) { resultsEl.innerHTML = ""; return; }
+    const items = await res.json();
+    resultsEl.innerHTML = items.map(it => `
+      <div class="result-row" onclick='pickCatalogResult(${id}, ${JSON.stringify(it.code)}, ${JSON.stringify(it.name)})'>
+        ${escapeHtml(it.name)} <span class="result-code">${escapeHtml(it.code)}</span>
+      </div>
+    `).join("");
+  } catch (e) {
+    resultsEl.innerHTML = "";
+  }
+}
+
+function pickCatalogResult(id, code, name) {
+  document.getElementById(`editCode-${id}`).value = code;
+  document.getElementById(`editName-${id}`).value = name;
+  document.getElementById(`editResults-${id}`).innerHTML = "";
+}
+
+async function saveEdit(id) {
+  const action = document.getElementById(`editAction-${id}`).value;
+  const catalog_code = document.getElementById(`editCode-${id}`).value.trim();
+  const catalog_name = document.getElementById(`editName-${id}`).value.trim();
+  const notes = document.getElementById(`editNotes-${id}`).value.trim();
+  const errEl = document.getElementById(`editErr-${id}`);
+  errEl.textContent = "";
+
+  if (action === "matched" && !catalog_code) {
+    errEl.textContent = 'כשהסטטוס הוא "הותאם" יש להזין קוד/ברקוד מהקטלוג.';
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/mappings/update/${id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, catalog_code, catalog_name, notes }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    EDITING_ID = null;
+    await loadMappings();
+  } catch (e) {
+    errEl.textContent = "שגיאה בשמירה: " + e.message;
+  }
+}
+
+async function deleteMapping(id) {
+  const m = ALL_MAPPINGS.find(x => x.id === id);
+  const label = m ? `${m.supplier_domain} / ${m.supplier_sku}` : id;
+  if (!confirm(`למחוק את ההתאמה הזו (${label})? בחשבונית הבאה מאותו ספק היא תופיע שוב לסיווג.`)) return;
+  try {
+    const res = await fetch(`/api/mappings/delete/${id}`, { method: "POST" });
+    if (!res.ok) throw new Error(await res.text());
+    await loadMappings();
+  } catch (e) {
+    alert("שגיאה במחיקה: " + e.message);
+  }
+}
+
+loadMappings();
+</script>
+</body>
+</html>
