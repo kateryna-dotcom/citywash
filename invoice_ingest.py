@@ -1,4 +1,3 @@
-
 """
 Ties gmail_client + invoice_store together: finds new supplier invoice
 emails, downloads the PDF, extracts its text, parses out the branch name,
@@ -23,6 +22,8 @@ from pypdf import PdfReader
 import branches
 import gmail_client
 import invoice_store
+import item_matcher
+import item_mapping_store
 
 # hadarrosen sends one email per branch with the branch name in the
 # subject, e.g. "חשבונית לסניף עכו" -> branch "עכו".
@@ -283,9 +284,29 @@ def parse_line_items(supplier_domain: str, text: str) -> list:
     if not parser or not text:
         return []
     try:
-        return parser(text)
+        items = parser(text)
     except Exception:  # noqa: BLE001
         return []
+    return _match_to_catalog(supplier_domain, items)
+
+
+def _match_to_catalog(supplier_domain: str, items: list) -> list:
+    """Enriches each parsed line item with its Cash On Tab catalogue match
+    (matched_code/matched_name/match_source/needs_confirmation), using any
+    mapping Kateryna has already confirmed for this supplier so the same
+    item is never asked about twice. Doesn't fail the whole invoice if the
+    catalogue or mapping table isn't reachable -- items just come back
+    unmatched, still reviewable by hand."""
+    if not items:
+        return items
+    try:
+        learned = item_mapping_store.get_mappings_for_supplier(supplier_domain)
+    except Exception:  # noqa: BLE001
+        learned = {}
+    try:
+        return item_matcher.match_invoice_items(items, learned)
+    except Exception:  # noqa: BLE001
+        return items
 
 
 def _extract_pdf_text(pdf_bytes: bytes) -> str:
