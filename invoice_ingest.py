@@ -499,11 +499,47 @@ def parse_pavilion_spark(text: str, pdf_bytes: bytes = None) -> list:
     return items
 
 
-# victoriascent.co.il ("ויקטוריה מוצרי ריח בע"מ" -- also חשבשבת, but a clean
-# single-line-per-item layout unlike moshaev/oz-b-g): "<name, may wrap to a
-# second line><qty.XX><price.XXX>ש"ח<discount.XX><total.XX> <13-digit
-# barcode>". Bounded between the "בר קוד" column header and the "סה"כ<digit>"
-# summary line so the header/footer text never gets mistaken for a row.
+# victoriascent.co.il ("ויקטוריה מוצרי ריח בע"מ" -- also חשבשבת). Under
+# pdftotext -layout the column order (as it appears in the raw text stream)
+# is: total, discount%, "ש"ח", price (3 decimals), qty, description, then
+# the 13-digit barcode (which doubles as this supplier's sku -- Victoria's
+# invoices don't carry a separate alpha sku). Some descriptions wrap onto a
+# lone following line (e.g. "Spray 30 ml -Premium black").
+_VICTORIA_LAYOUT_ROW_RE = re.compile(
+    r'(?P<total>[\d,]+\.\d{2})[ \t]+'
+    r'(?P<discount>[\d,]+\.\d{2})[ \t]+'
+    r'ש"ח[ \t]+'
+    r'(?P<price>[\d,]+\.\d{3})[ \t]+'
+    r'(?P<qty>[\d,]+\.\d{2})[ \t]+'
+    r'(?P<desc>.+?)[ \t]+'
+    r'(?P<barcode>\d{12,13})[ \t]*$',
+    re.MULTILINE,
+)
+# A continuation line is a bare description fragment. Anything starting
+# with a barcode, a totals/footer marker, or a "total" amount (i.e. the
+# first column of the NEXT data row) is not a continuation.
+_VICTORIA_NOT_CONTINUATION_RE = re.compile(r'^\s*(\d{12,13}|סה"כ|תאריך|הנחה|\d+\s*%|[\d,]+\.\d{2}\s)')
+
+
+def _parse_victoria_layout(text: str) -> list:
+    items = []
+    for m in _VICTORIA_LAYOUT_ROW_RE.finditer(text):
+        qty, price, total = _num(m.group("qty")), _num(m.group("price")), _num(m.group("total"))
+        confident = None not in (qty, price, total) and abs(round(qty * price, 2) - total) < 0.5
+        desc = m.group("desc").strip()
+        after = text[m.end():m.end() + 200].split("\n", 2)
+        cont = after[1].strip() if len(after) > 1 else ""
+        if cont and not _VICTORIA_NOT_CONTINUATION_RE.match(cont):
+            desc = f"{desc} {cont}".strip()
+        items.append({
+            "sku": m.group("barcode"), "description": desc,
+            "quantity": qty, "unit_price": price, "total": total, "confident": confident,
+        })
+    return items
+
+
+# Legacy pattern, built against pypdf's plain extraction -- kept as a
+# fallback for when pdf_bytes isn't available.
 _VICTORIA_ROW_RE = re.compile(
     r'(?P<name>.+?)'
     r'(?P<qty>-?\d+\.\d{2})'
@@ -516,7 +552,14 @@ _VICTORIA_ROW_RE = re.compile(
 )
 
 
-def parse_victoria_scent(text: str) -> list:
+def parse_victoria_scent(text: str, pdf_bytes: bytes = None) -> list:
+    if pdf_bytes:
+        layout_text = _extract_pdf_text_layout(pdf_bytes)
+        if layout_text:
+            items = _parse_victoria_layout(layout_text)
+            if items:
+                return items
+
     start_marker = "בר קוד"
     start_idx = text.find(start_marker)
     start = start_idx + len(start_marker) if start_idx != -1 else 0
