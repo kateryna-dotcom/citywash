@@ -14,6 +14,8 @@ step alone; Kateryna reviews on the dashboard before anything is entered.
 """
 import io
 import re
+import subprocess
+import tempfile
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
@@ -191,7 +193,7 @@ _HADARROSEN_ROW_RE = re.compile(
 )
 
 
-def parse_hadarrosen(text: str) -> list:
+def parse_hadarrosen(text: str, pdf_bytes: bytes = None) -> list:
     items = []
     for m in _HADARROSEN_ROW_RE.finditer(text):
         qty, price, total = _num(m.group("qty")), _num(m.group("price")), _num(m.group("total"))
@@ -204,61 +206,80 @@ def parse_hadarrosen(text: str) -> list:
     if items:
         return items
     # Some hadarrosen invoices (e.g. wiper-blade orders) use a completely
-    # different layout -- no barcode column, and it's not the scent-product
-    # template the regex above was built from. Try that format too before
-    # giving up.
+    # different table layout -- no barcode column, and pypdf's plain
+    # extract_text() actually DROPS the size/model text this layout has
+    # (e.g. 'TITANIUM + "16'), because it can't follow this particular
+    # table's column order. pdftotext -layout preserves columns properly
+    # and gets the full description, so re-extract with that instead of
+    # working from the (incomplete) text pypdf already gave us.
+    if pdf_bytes:
+        layout_text = _extract_pdf_text_layout(pdf_bytes)
+        if layout_text:
+            items = parse_hadarrosen_wipers(layout_text)
+            if items:
+                return items
     return parse_hadarrosen_wipers(text)
 
 
+def _extract_pdf_text_layout(pdf_bytes: bytes) -> str:
+    """Re-extracts a PDF's text via poppler's pdftotext -layout, which
+    keeps table columns in their visual order -- pypdf's extract_text()
+    sometimes drops or garbles tokens in wide/multi-column tables. Returns
+    "" (never raises) if poppler isn't installed or extraction fails, so
+    callers can fall back to the pypdf text."""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
+            f.write(pdf_bytes)
+            f.flush()
+            result = subprocess.run(
+                ["pdftotext", "-layout", f.name, "-"],
+                capture_output=True, timeout=30,
+            )
+        if result.returncode != 0:
+            return ""
+        text = result.stdout.decode("utf-8", errors="replace")
+        # Strip bidi embedding/mark control chars (LRM/RLM/LRE/RLE/PDF/
+        # LRI/RLI/FSI/PDI) that pdftotext wraps RTL runs in -- invisible
+        # but break substring/regex matching otherwise.
+        return re.sub(r"[‎‏‪-‮⁦-⁩]", "", text)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 # hadarrosen.com, second layout seen on some invoices (e.g. wiper blades):
-# no barcode column, short internal item codes instead. Each row is
-# "<row#><8-digit item code><description><qty><price> ₪<total> ₪" with the
-# qty and price digits glued together (e.g. "2014.30" = qty 20, price
-# 14.30) -- ambiguous from the digits alone, so every split point is tried
-# and the one whose qty*price reconciles with the printed total wins.
+# columns (right-to-left as printed, so left-to-right in extracted text)
+# are total, price, qty, description (may include an English model name
+# like "TITANIUM + \"16"), item code, row#. Only matched against
+# pdftotext -layout output (see parse_hadarrosen) -- the column spacing
+# this regex relies on isn't there in pypdf's plain-text extraction.
 _HADARROSEN_WIPER_ROW_RE = re.compile(
-    r'(?P<leading>\d{7,11})'
-    r'(?P<desc>[^\d₪]+?)'
-    r'(?P<numblock>\d+\.\d{2})\s*₪\s*'
-    r'(?P<total>[\d,]+\.\d{2})\s*₪'
+    r'(?P<total>[\d,]+\.\d{2})\s*₪\s*'
+    r'(?P<price>[\d,]+\.\d{2})\s*₪\s*'
+    r'(?P<qty>\d+)\s+'
+    r'(?P<desc>.+?)\s+'
+    r'(?P<code>\d{6,9})\s+'
+    r'(?P<row>\d+)\s*$',
+    re.MULTILINE,
 )
 _HADARROSEN_WIPER_HEADER = "מס' פריט"
-
-
-def _split_glued_qty_price(numblock: str, total):
-    """numblock is qty and price digits glued with no separator (only the
-    final 2 digits after the decimal point are unambiguously price's
-    cents). Tries every place the qty/price boundary could be and keeps
-    the one whose product reconciles with the row's printed total."""
-    if total is None or "." not in numblock:
-        return None, None
-    int_part, cents = numblock.split(".")
-    for i in range(1, len(int_part)):
-        qty, price = _num(int_part[:i]), _num(f"{int_part[i:]}.{cents}")
-        if qty is None or price is None:
-            continue
-        if abs(round(qty * price, 2) - total) < 0.5:
-            return qty, price
-    return None, None
 
 
 def parse_hadarrosen_wipers(text: str) -> list:
     start_idx = text.find(_HADARROSEN_WIPER_HEADER)
     if start_idx == -1:
         return []
-    end_m = re.search(r'סה"כ\d', text[start_idx:])
+    end_m = re.search(r'סה"כ\s*:?\s*\d', text[start_idx:])
     end = start_idx + end_m.start() if end_m else len(text)
     section = text[start_idx:end]
 
     items = []
     for m in _HADARROSEN_WIPER_ROW_RE.finditer(section):
-        total = _num(m.group("total"))
-        qty, price = _split_glued_qty_price(m.group("numblock"), total)
+        qty, price, total = _num(m.group("qty")), _num(m.group("price")), _num(m.group("total"))
+        confident = None not in (qty, price, total) and abs(round(qty * price, 2) - total) < 0.5
         items.append({
-            "sku": m.group("leading")[-8:],
+            "sku": m.group("code"),
             "description": m.group("desc").strip(),
-            "quantity": qty, "unit_price": price, "total": total,
-            "confident": qty is not None and price is not None,
+            "quantity": qty, "unit_price": price, "total": total, "confident": confident,
         })
     return items
 
@@ -338,11 +359,16 @@ _LINE_ITEM_PARSERS = {
 }
 
 
-def parse_line_items(supplier_domain: str, text: str) -> list:
+def parse_line_items(supplier_domain: str, text: str, pdf_bytes: bytes = None) -> list:
     parser = _LINE_ITEM_PARSERS.get(supplier_domain)
     if not parser or not text:
         return []
     try:
+        # Only parse_hadarrosen currently accepts pdf_bytes (to re-extract
+        # via pdftotext -layout when needed) -- other parsers' signatures
+        # don't take it, so fall back to the text-only call for those.
+        items = parser(text, pdf_bytes=pdf_bytes) if pdf_bytes is not None else parser(text)
+    except TypeError:
         items = parser(text)
     except Exception:  # noqa: BLE001
         return []
@@ -456,7 +482,7 @@ def process_new_invoices(lookback_days: int = 30) -> dict:
             first = pdf_attachments[0]
             pdf_bytes = gmail_client.get_attachment_bytes(message_id, first["attachmentId"])
             text = _extract_pdf_text(pdf_bytes)
-            line_items = parse_line_items(supplier_domain, text)
+            line_items = parse_line_items(supplier_domain, text, pdf_bytes=pdf_bytes)
 
             invoice_store.create_record({
                 "gmail_message_id": message_id,
@@ -466,6 +492,7 @@ def process_new_invoices(lookback_days: int = 30) -> dict:
                 "received_at": received_at,
                 "pdf_filename": first["filename"],
                 "raw_text": text,
+                "pdf_data": pdf_bytes,
                 "branch": _guess_branch(subject, text),
                 "invoice_number": _guess_invoice_number(subject, text),
                 "line_items": line_items or None,
