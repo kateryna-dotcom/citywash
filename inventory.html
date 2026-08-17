@@ -227,13 +227,10 @@ async function loadRecords() {
 function matchCell(recordId, idx, it) {
   const src = it.match_source;
   if (src === "skip") {
-    return `<span class="match-badge skip">לא נכנס למלАי</span>`;
+    return `<span class="match-badge skip">לא נכנס למלАי</span> ${fixToggle(recordId, idx)}${matchResolveInput(recordId, idx, true)}`;
   }
-  if (src === "matched" || src === "exact" || src === "learned") {
-    return `<span class="match-badge ok">✓ ${escapeHtml(it.matched_name || "")}</span>`;
-  }
-  if (src === "fuzzy" && !it.needs_confirmation) {
-    return `<span class="match-badge ok">✓ ${escapeHtml(it.matched_name || "")}</span>`;
+  if (src === "matched" || src === "exact" || src === "learned" || (src === "fuzzy" && !it.needs_confirmation)) {
+    return `<span class="match-badge ok">✓ ${escapeHtml(it.matched_name || "")}</span> ${fixToggle(recordId, idx)}${matchResolveInput(recordId, idx, true)}`;
   }
   if (src === "new_pending") {
     return `
@@ -250,10 +247,15 @@ function matchCell(recordId, idx, it) {
   `;
 }
 
-function matchResolveInput(recordId, idx) {
+function fixToggle(recordId, idx) {
+  const cellId = `match-${recordId}-${idx}`;
+  return `<button class="toggle-raw" style="font-size:11px;" onclick="event.stopPropagation(); document.getElementById('${cellId}').style.display='flex';document.getElementById('${cellId}-toggle').style.display='none';">✏️ לא נכון? תקן</button><span id="${cellId}-toggle" style="display:none"></span>`;
+}
+
+function matchResolveInput(recordId, idx, hidden) {
   const cellId = `match-${recordId}-${idx}`;
   return `
-    <div class="match-resolve" id="${cellId}" onclick="event.stopPropagation()">
+    <div class="match-resolve" id="${cellId}" onclick="event.stopPropagation()" ${hidden ? 'style="display:none"' : ''}>
       <input type="text" placeholder="ברקוד המוצר" id="${cellId}-input">
       <button class="btn tiny" onclick="matchItemBarcode(${recordId}, ${idx}, '${cellId}')">✓ הזן</button>
       <button class="btn tiny skip-btn" onclick="skipItemMatch(${recordId}, ${idx}, '${cellId}')">✗ לא להכניס</button>
