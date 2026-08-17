@@ -433,10 +433,42 @@ def parse_hadarrosen_wipers(text: str) -> list:
     return items
 
 
-# pavilion-spark.co.il ("ביתן ספארק סחר בע"מ" -- Priority-software invoices):
-# one line per item -- "<total> שח<net_price> <discount>% שח<gross_price>
-# יח<qty><description><מק"ט/sku> <document ref> <row#>". Reconciles as
+# pavilion-spark.co.il ("ביתן ספארק סחר בע"מ" -- Priority-software invoices),
+# matched against pdftotext -layout output: one line per item, columns
+# (right-to-left as printed) total / net_price שח / discount% / gross_price
+# שח / qty יח / description / sku+document-ref / row#. Reconciles as
 # qty * net_price == total (net_price already has the discount applied).
+_PAVILION_LAYOUT_ROW_RE = re.compile(
+    r'(?P<total>[\d,]+\.\d{2})\s*'
+    r'(?P<net_price>[\d,]+\.\d{2})\s*שח\s*'
+    r'(?P<discount>[\d,]+\.\d{2})%\s*'
+    r'(?P<gross_price>[\d,]+\.\d{2})\s*שח\s*'
+    r'(?P<qty>\d+)\s*יח\s*'
+    r'(?P<desc>.+?)\s+'
+    r'(?P<sku>[A-Za-z0-9][A-Za-z0-9\-]{2,})\s+SH\d+\s+'
+    r'(?P<row_num>\d+)\s*$',
+    re.MULTILINE,
+)
+_PAVILION_INVOICE_RE = re.compile(r'SI\d{6,}')
+
+
+def _parse_pavilion_layout(text: str) -> list:
+    items = []
+    for m in _PAVILION_LAYOUT_ROW_RE.finditer(text):
+        qty, net, total = _num(m.group("qty")), _num(m.group("net_price")), _num(m.group("total"))
+        confident = None not in (qty, net, total) and abs(round(qty * net, 2) - total) < 0.5
+        items.append({
+            "sku": m.group("sku"), "description": m.group("desc").strip(),
+            "quantity": qty, "unit_price": net, "total": total, "confident": confident,
+        })
+    return items
+
+
+# Legacy pattern, built against pypdf's plain (often-truncated) extraction
+# -- kept as a fallback for when pdf_bytes isn't available or pdftotext
+# fails. Structurally near-identical to the layout regex above; pavilion's
+# invoices happened to hold up reasonably well under pypdf, but keeping
+# this separate avoids re-verifying that assumption under time pressure.
 _PAVILION_ROW_RE = re.compile(
     r'(?P<total>[\d,]+\.\d{2})\s*שח'
     r'(?P<net_price>[\d,]+\.\d{2})\s*'
@@ -447,10 +479,15 @@ _PAVILION_ROW_RE = re.compile(
     r'(?P<sku>[A-Za-z0-9][A-Za-z0-9\-]{2,})\s+SH\d+\s+\d+\s*$',
     re.MULTILINE,
 )
-_PAVILION_INVOICE_RE = re.compile(r'SI\d{6,}')
 
 
-def parse_pavilion_spark(text: str) -> list:
+def parse_pavilion_spark(text: str, pdf_bytes: bytes = None) -> list:
+    if pdf_bytes:
+        layout_text = _extract_pdf_text_layout(pdf_bytes)
+        if layout_text:
+            items = _parse_pavilion_layout(layout_text)
+            if items:
+                return items
     items = []
     for m in _PAVILION_ROW_RE.finditer(text):
         qty, net, total = _num(m.group("qty")), _num(m.group("net_price")), _num(m.group("total"))
