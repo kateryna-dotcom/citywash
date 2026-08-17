@@ -174,6 +174,23 @@ def upsert_mapping(supplier_domain: str, supplier_sku: str, action: str,
     return row[0] if row else None
 
 
+def update_mapping_by_id(mapping_id: int, action: str, catalog_code: str = None,
+                          catalog_name: str = None, notes: str = None) -> bool:
+    """Edits an existing mapping row in place (used by the review page --
+    supplier_domain/supplier_sku are the identity of the row and are never
+    changed here, only what it resolves to)."""
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE item_mappings
+                SET action=%s, catalog_code=%s, catalog_name=%s, notes=%s, updated_at=now()
+                WHERE id=%s
+            """, (action, catalog_code, catalog_name, notes, mapping_id))
+            updated = cur.rowcount > 0
+        conn.commit()
+    return updated
+
+
 def delete_mapping(mapping_id: int):
     with _get_conn() as conn:
         with conn.cursor() as cur:
