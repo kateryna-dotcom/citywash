@@ -1,3 +1,4 @@
+
 """
 Standalone web page (no WhatsApp/Meta/Telegram needed) that looks like a
 WhatsApp chat and generates HR documents for א.ב.ת. שירותי שטיפה:
@@ -41,6 +42,8 @@ import pension_companies
 import branches
 import invoice_store
 import invoice_ingest
+import item_matcher
+import item_mapping_store
 
 # doc_type keys that support the "send for SMS signature" option -- each of
 # these templates has an invisible marker (§) placed at the signature spot.
@@ -92,6 +95,14 @@ def _startup():
         invoice_store.init_db()
     except Exception as e:  # noqa: BLE001
         print(f"[startup] invoice_store.init_db() skipped: {e}")
+
+    try:
+        # Creates item_mappings and seeds the product-match confirmations
+        # Kateryna has already given (see item_mapping_store._SEED_MAPPINGS)
+        # -- idempotent, only inserts rows that don't exist yet.
+        item_mapping_store.init_db()
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] item_mapping_store.init_db() skipped: {e}")
 
     # Background polling for new supplier invoices -- runs regardless of
     # whether anyone has the dashboard open. If GMAIL_* env vars aren't set
@@ -574,6 +585,63 @@ async def inventory_resolve_item(record_id: int, item_index: int, request: Reque
     except Exception as e:  # noqa: BLE001
         return Response(f"Error updating item: {e}", status_code=500)
     return {"status": "updated"}
+
+
+@app.post("/api/inventory/match-item/{record_id}/{item_index}")
+async def inventory_match_item(record_id: int, item_index: int, request: Request):
+    """Resolves a line item the automatic matcher couldn't confidently
+    place: either Kateryna types/scans the Cash On Tab barcode of the
+    correct product ("matched"), or marks it as never-to-be-entered
+    ("skip"). Either way the decision is saved to item_mappings so this
+    exact supplier SKU is never asked about again on future invoices."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    payload = await request.json()
+    action = payload.get("action")
+    barcode = (payload.get("barcode") or "").strip()
+
+    record = invoice_store.get_record(record_id)
+    if not record:
+        return Response("Invoice record not found", status_code=404)
+    items = record.get("line_items") or []
+    if item_index < 0 or item_index >= len(items):
+        return Response("Item index out of range", status_code=404)
+    line_item = items[item_index]
+    supplier_domain = record.get("supplier_domain") or ""
+    sku = line_item.get("sku") or line_item.get("barcode") or ""
+    if not sku:
+        return Response("This item has no SKU/barcode to key the mapping on", status_code=400)
+
+    try:
+        if action == "skip":
+            item_mapping_store.upsert_mapping(supplier_domain, sku, "skip")
+            invoice_store.update_line_item(record_id, item_index, {
+                "match_source": "skip", "needs_confirmation": False,
+                "matched_code": None, "matched_barcode": None, "matched_name": None,
+            })
+            return {"status": "updated", "match_source": "skip"}
+
+        if action == "matched":
+            if not barcode:
+                return Response("barcode is required for action=matched", status_code=400)
+            item = item_matcher.lookup(barcode)
+            if not item:
+                return Response(f'הברקוד "{barcode}" לא נמצא בקטלוג Cash On Tab', status_code=400)
+            item_mapping_store.upsert_mapping(
+                supplier_domain, sku, "matched",
+                catalog_code=item["code"], catalog_name=item["name"],
+            )
+            invoice_store.update_line_item(record_id, item_index, {
+                "match_source": "matched", "needs_confirmation": False,
+                "matched_code": item["code"], "matched_barcode": item.get("barcode"),
+                "matched_name": item["name"],
+            })
+            return {"status": "updated", "match_source": "matched", "matched_name": item["name"]}
+
+        return Response('action must be "matched" or "skip"', status_code=400)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error resolving item: {e}", status_code=500)
 
 
 @app.post("/api/inventory/mark/{record_id}")
