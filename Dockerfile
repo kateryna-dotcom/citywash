@@ -1,9 +1,13 @@
 FROM python:3.11-slim
 
-# LibreOffice + Hebrew fonts, needed to convert the filled .docx to PDF
+# LibreOffice + Hebrew fonts, needed to convert the filled .docx to PDF.
+# poppler-utils (pdftotext) is used as a more reliable text-extraction
+# fallback for some suppliers' invoice PDFs (see invoice_ingest.py) --
+# pypdf's plain extract_text() sometimes drops/garbles wide table columns.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice \
     fonts-culmus \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
