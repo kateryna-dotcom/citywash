@@ -25,6 +25,8 @@ import json
 import os
 import re
 
+import catalog_store
+
 _CATALOG_PATH = os.path.join(os.path.dirname(__file__), "cashontab_catalog.json")
 
 # Above this score a fuzzy name match is good enough to propose confidently,
@@ -65,13 +67,29 @@ def _clean_key(s: str) -> str:
 clean_key = _clean_key
 
 
+def reload():
+    """Forces the next _load() to re-read the catalogue from scratch --
+    called right after a live sync (catalog_store.replace_catalog) so the
+    new data is used immediately, no restart needed."""
+    global _catalog
+    _catalog = None
+
+
 def _load():
-    """Loads and indexes the catalogue once per process."""
+    """Loads and indexes the catalogue once per process: from Postgres if
+    she's ever synced (catalog_store), otherwise falling back to the
+    bundled point-in-time JSON export so matching still works before the
+    first live sync."""
     global _catalog, _by_barcode, _by_code, _normalized_names
     if _catalog is not None:
         return
-    with open(_CATALOG_PATH, encoding="utf-8") as f:
-        _catalog = json.load(f)
+    try:
+        _catalog = catalog_store.get_catalog()
+    except Exception:  # noqa: BLE001
+        _catalog = []
+    if not _catalog:
+        with open(_CATALOG_PATH, encoding="utf-8") as f:
+            _catalog = json.load(f)
     _by_barcode, _by_code, _normalized_names = {}, {}, []
     for item in _catalog:
         if item.get("barcode"):
