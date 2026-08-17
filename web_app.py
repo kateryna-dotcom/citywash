@@ -1,4 +1,3 @@
-
 """
 Standalone web page (no WhatsApp/Meta/Telegram needed) that looks like a
 WhatsApp chat and generates HR documents for א.ב.ת. שירותי שטיפה:
@@ -582,8 +581,9 @@ def inventory_check_now(request: Request):
 @app.post("/api/inventory/reparse/{record_id}")
 def inventory_reparse(record_id: int, request: Request):
     """Re-runs the line-item parser against this invoice's already-stored
-    raw_text -- for records ingested before a parser fix (or bug), so she
-    doesn't have to wait for/trigger a fresh Gmail fetch to pick it up."""
+    raw_text (and original PDF, if we have it) -- for records ingested
+    before a parser fix (or bug), so she doesn't have to wait for/trigger a
+    fresh Gmail fetch to pick it up."""
     unauthorized = _require_api_auth(request)
     if unauthorized:
         return unauthorized
@@ -591,13 +591,31 @@ def inventory_reparse(record_id: int, request: Request):
     if not record:
         return Response("Invoice record not found", status_code=404)
     try:
+        pdf_bytes = invoice_store.get_pdf_data(record_id)
         line_items = invoice_ingest.parse_line_items(
-            record.get("supplier_domain") or "", record.get("raw_text") or ""
+            record.get("supplier_domain") or "", record.get("raw_text") or "", pdf_bytes=pdf_bytes
         )
         invoice_store.update_line_items(record_id, line_items or None)
     except Exception as e:  # noqa: BLE001
         return Response(f"Error reparsing invoice: {e}", status_code=500)
     return {"status": "reparsed", "item_count": len(line_items or [])}
+
+
+@app.get("/api/inventory/search-catalog")
+def inventory_search_catalog(request: Request, q: str = ""):
+    """Live catalogue search backing the fix/resolve box in the review UI --
+    lets her browse real product names (e.g. distinguishing '... TITANIUM
+    14\"' from '... TITANIUM 16\"') instead of typing a barcode blind."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    q = (q or "").strip()
+    if not q:
+        return []
+    try:
+        return item_matcher.search_by_name(q, limit=10)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error searching catalog: {e}", status_code=500)
 
 
 @app.post("/api/inventory/resolve-item/{record_id}/{item_index}")
