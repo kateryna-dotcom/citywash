@@ -67,7 +67,38 @@
   @media (max-width: 900px) {
     .messages, .input-row { padding-left: 5%; padding-right: 5%; }
   }
+
+  /* Bulk (Excel -> many contracts) panel */
+  .bulk-panel { display: none; flex: 1; overflow-y: auto; padding: 22px 8%; }
+  .bulk-panel.open { display: block; }
+  .bulk-card {
+    background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 20px 22px; margin-bottom: 16px;
+  }
+  .bulk-card h3 { margin: 0 0 8px; color: var(--blue-dark); font-size: 17px; }
+  .bulk-card p { margin: 4px 0; font-size: 14px; color: #5b7186; line-height: 1.5; }
+  .bulk-back { background: none; border: none; color: var(--blue); font-size: 14px; cursor: pointer; padding: 0; margin-bottom: 10px; }
+  .bulk-btn {
+    background: var(--blue); color: #fff; border: none; border-radius: 8px; padding: 10px 18px;
+    font-size: 14.5px; cursor: pointer; font-weight: 600;
+  }
+  .bulk-btn:hover { background: var(--blue-dark); }
+  .bulk-btn.secondary { background: #fff; color: var(--blue); border: 1px solid var(--blue); }
+  .bulk-btn:disabled { opacity: 0.45; cursor: default; }
+  .bulk-row-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .bulk-table-wrap { overflow-x: auto; }
+  table.bulk-table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13px; }
+  table.bulk-table th {
+    text-align: right; color: #5b7186; font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  table.bulk-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.bulk-table tr.bulk-invalid td { background: #fdecec; }
+  .bulk-status-ok { color: #1a8a4a; font-weight: 600; }
+  .bulk-status-err { color: #d92b2b; font-size: 12px; }
+  .bulk-summary { font-size: 13.5px; margin-top: 6px; }
+  .bulk-generate-status { font-size: 13.5px; margin-top: 10px; color: #5b7186; }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 <div class="chat-wrap">
@@ -82,6 +113,34 @@
   <div class="input-row" id="inputRow">
     <input type="text" id="textInput" placeholder="הקלד/י תשובה..." autocomplete="off">
     <button id="sendBtn">➤</button>
+  </div>
+
+  <div class="bulk-panel" id="bulkPanel">
+    <button class="bulk-back" onclick="location.reload()">🔙 חזרה לתפריט הראשי</button>
+
+    <div class="bulk-card">
+      <h3>📦 יצירת חוזי עבודה + הצהרת בטיחות בכמות</h3>
+      <p>החברה שנבחרה: <strong id="bulkCompanyName"></strong></p>
+      <p>1. הורידי את תבנית האקסל, מלאי שורה אחת לכל עובד/ת (כולל מנהלי תחנה — יש עמודת "סוג").</p>
+      <p>2. העלי את הקובץ המלא — כל שורה תיבדק ותוצג כאן לפני היצירה.</p>
+      <p>3. לכל אדם ייווצר PDF אחד (חוזה + הצהרת בטיחות מאוחדים), הכל יורד כקובץ ZIP אחד.</p>
+      <div class="bulk-row-controls">
+        <button class="bulk-btn secondary" onclick="downloadBulkTemplate()">⬇️ הורד/י תבנית Excel</button>
+        <input type="file" id="bulkFileInput" accept=".xlsx,.xls" onchange="handleBulkFile(this.files[0])">
+      </div>
+    </div>
+
+    <div class="bulk-card" id="bulkPreviewCard" style="display:none;">
+      <h3>תצוגה מקדימה</h3>
+      <div class="bulk-summary" id="bulkSummary"></div>
+      <div class="bulk-table-wrap">
+        <table class="bulk-table" id="bulkTable"></table>
+      </div>
+      <div class="bulk-row-controls">
+        <button class="bulk-btn" id="bulkGenerateBtn" onclick="generateBulkZip()" disabled>⬇️ צור/י את כל המסמכים (ZIP)</button>
+        <span class="bulk-generate-status" id="bulkGenerateStatus"></span>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -282,7 +341,13 @@ async function start() {
 async function askDocType() {
   await botSay("איזה מסמך תרצי ליצור?");
   const options = Object.entries(DOC_TYPES).map(([key, cfg]) => [cfg.label, key]);
+  options.push(["📦 יצירת חוזים בכמות (מ-Excel)", "BULK"]);
   addQuickReplies(options, (label, key) => {
+    if (key === "BULK") {
+      addBubble(label, "user");
+      startBulkFlow();
+      return;
+    }
     docType = key;
     step = 0;
     groupFilled = 0;
@@ -497,6 +562,170 @@ sendBtn.onclick = () => {
 textInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") sendBtn.click();
 });
+
+// ---------------------------------------------------------------------
+// Bulk contract generation from an Excel file (many people at once).
+// Reuses the company already picked at the start of the chat; each row
+// becomes one merged (contract + הצהרת בטיחות) PDF, all downloaded together
+// as a single ZIP.
+// ---------------------------------------------------------------------
+const bulkPanel = document.getElementById("bulkPanel");
+const BULK_HEADERS = ["סוג", "שם מלא", "ת.ז / דרכון", "תפקיד (לעובד בלבד)", "תחנה",
+  "תאריך תחילת עבודה", "משמרת (לעובד בלבד)", "סוג שכר", "סכום שכר"];
+const BULK_TYPE_MAP = { "עובד": "worker", "עובד/ת": "worker", "מנהל": "manager", "מנהל/ת": "manager", "מנהלת": "manager" };
+const BULK_TYPE_LABEL = { worker: "עובד/ת", manager: "מנהל/ת תחנה" };
+const BULK_PAY_MAP = { "חודשי": "monthly", "שעתי": "hourly" };
+const BULK_SCHEDULE_MAP = { "קבועה": "fixed", "משרה קבועה": "fixed", "משמרות": "shift", "משמרת": "shift" };
+let BULK_ROWS = [];
+
+function startBulkFlow() {
+  document.querySelector(".messages").style.display = "none";
+  inputRow.style.display = "none";
+  document.getElementById("bulkCompanyName").textContent = data.COMPANY_NAME || "";
+  bulkPanel.classList.add("open");
+}
+
+function downloadBulkTemplate() {
+  const example = [
+    ["עובד", "ישראל ישראלי", "123456782", "עובד ניגוב", "חדרה", "01.09.2026", "קבועה", "שעתי", "35"],
+    ["מנהל", "דנה כהן", "987654321", "", "רעננה", "15.09.2026", "", "חודשי", "9500"],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet([BULK_HEADERS, ...example]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "עובדים");
+  XLSX.writeFile(wb, "תבנית_חוזים.xlsx");
+}
+
+function formatBulkDate(v) {
+  if (v instanceof Date && !isNaN(v)) {
+    const pad = n => String(n).padStart(2, "0");
+    return `${pad(v.getDate())}.${pad(v.getMonth() + 1)}.${v.getFullYear()}`;
+  }
+  return String(v ?? "").trim();
+}
+
+function parseBulkRow(raw) {
+  const errors = [];
+
+  const typeRaw = String(raw["סוג"] ?? "").trim();
+  const type = BULK_TYPE_MAP[typeRaw];
+  if (!type) errors.push(`סוג לא מזוהה: "${typeRaw}" (צריך להיות עובד או מנהל)`);
+
+  const EMPLOYEE_NAME = String(raw["שם מלא"] ?? "").trim();
+  if (!EMPLOYEE_NAME) errors.push("חסר שם מלא");
+
+  const EMPLOYEE_ID = String(raw["ת.ז / דרכון"] ?? "").trim();
+  if (!EMPLOYEE_ID) errors.push("חסר ת.ז / דרכון");
+
+  const STATION_NAME = String(raw["תחנה"] ?? "").trim();
+  if (!STATION_NAME) errors.push("חסרה תחנה");
+
+  const START_DATE = formatBulkDate(raw["תאריך תחילת עבודה"]);
+  if (!/^\d{1,2}\.\d{1,2}\.\d{4}$/.test(START_DATE)) errors.push(`תאריך לא תקין: "${START_DATE}"`);
+
+  const payRaw = String(raw["סוג שכר"] ?? "").trim();
+  const PAY_TYPE = BULK_PAY_MAP[payRaw];
+  if (!PAY_TYPE) errors.push(`סוג שכר לא מזוהה: "${payRaw}" (צריך להיות חודשי או שעתי)`);
+
+  const AMOUNT = String(raw["סכום שכר"] ?? "").trim();
+  if (!AMOUNT || isNaN(Number(AMOUNT))) errors.push("סכום שכר לא תקין");
+
+  const JOB_TITLE = String(raw["תפקיד (לעובד בלבד)"] ?? "").trim();
+  const scheduleRaw = String(raw["משמרת (לעובד בלבד)"] ?? "").trim();
+  const SCHEDULE_TYPE = BULK_SCHEDULE_MAP[scheduleRaw];
+
+  if (type === "worker") {
+    if (!JOB_TITLE) errors.push("חסר תפקיד (נדרש לעובד/ת)");
+    if (!SCHEDULE_TYPE) errors.push(`משמרת לא מזוהה: "${scheduleRaw}" (צריך להיות קבועה או משמרות)`);
+  }
+
+  return {
+    type, EMPLOYEE_NAME, EMPLOYEE_ID, STATION_NAME, START_DATE, PAY_TYPE, AMOUNT,
+    JOB_TITLE, SCHEDULE_TYPE, errors, valid: errors.length === 0,
+  };
+}
+
+function handleBulkFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const wb = XLSX.read(new Uint8Array(e.target.result), { type: "array", cellDates: true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rawRows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+    BULK_ROWS = rawRows.map(parseBulkRow);
+    renderBulkPreview();
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function renderBulkPreview() {
+  document.getElementById("bulkPreviewCard").style.display = "";
+  const validCount = BULK_ROWS.filter(r => r.valid).length;
+  const invalidCount = BULK_ROWS.length - validCount;
+  document.getElementById("bulkSummary").innerHTML = invalidCount
+    ? `נמצאו ${BULK_ROWS.length} שורות, מתוכן <strong style="color:#d92b2b">${invalidCount} עם שגיאות</strong> — יש לתקן בקובץ ולהעלות מחדש לפני היצירה.`
+    : `נמצאו ${BULK_ROWS.length} שורות, כולן תקינות. אפשר ליצור.`;
+
+  const table = document.getElementById("bulkTable");
+  const headRow = "<tr><th>#</th><th>סוג</th><th>שם</th><th>ת.ז</th><th>תחנה</th><th>תאריך</th><th>שכר</th><th>סטטוס</th></tr>";
+  const bodyRows = BULK_ROWS.map((r, i) => {
+    const payLabel = r.PAY_TYPE === "monthly" ? "חודשי" : (r.PAY_TYPE === "hourly" ? "שעתי" : "?");
+    const status = r.valid
+      ? '<span class="bulk-status-ok">✓ תקין</span>'
+      : `<span class="bulk-status-err">${r.errors.map(escapeHtmlBulk).join("; ")}</span>`;
+    return `<tr class="${r.valid ? "" : "bulk-invalid"}">
+      <td>${i + 1}</td>
+      <td>${escapeHtmlBulk(BULK_TYPE_LABEL[r.type] || r.type || "?")}</td>
+      <td>${escapeHtmlBulk(r.EMPLOYEE_NAME)}</td>
+      <td>${escapeHtmlBulk(r.EMPLOYEE_ID)}</td>
+      <td>${escapeHtmlBulk(r.STATION_NAME)}</td>
+      <td>${escapeHtmlBulk(r.START_DATE)}</td>
+      <td>${escapeHtmlBulk(r.AMOUNT)} (${payLabel})</td>
+      <td>${status}</td>
+    </tr>`;
+  }).join("");
+  table.innerHTML = headRow + bodyRows;
+
+  const genBtn = document.getElementById("bulkGenerateBtn");
+  genBtn.disabled = !(BULK_ROWS.length > 0 && invalidCount === 0);
+  document.getElementById("bulkGenerateStatus").textContent = "";
+}
+
+function escapeHtmlBulk(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function generateBulkZip() {
+  const statusEl = document.getElementById("bulkGenerateStatus");
+  const genBtn = document.getElementById("bulkGenerateBtn");
+  genBtn.disabled = true;
+  statusEl.textContent = "מכין/ה מסמכים... זה יכול לקחת כדקה עבור הרבה אנשים.";
+  const people = BULK_ROWS.map(r => ({
+    type: r.type, EMPLOYEE_NAME: r.EMPLOYEE_NAME, EMPLOYEE_ID: r.EMPLOYEE_ID,
+    STATION_NAME: r.STATION_NAME, START_DATE: r.START_DATE, PAY_TYPE: r.PAY_TYPE,
+    AMOUNT: r.AMOUNT, JOB_TITLE: r.JOB_TITLE, SCHEDULE_TYPE: r.SCHEDULE_TYPE,
+  }));
+  try {
+    const res = await fetch("/api/bulk-generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company_name: data.COMPANY_NAME, company_id: data.COMPANY_ID, people }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `חוזים_${data.COMPANY_NAME}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    statusEl.innerHTML = `<span class="bulk-status-ok">✅ נוצרו ${people.length} מסמכים והורדו כקובץ ZIP.</span>`;
+  } catch (e) {
+    statusEl.innerHTML = `<span class="bulk-status-err">שגיאה: ${escapeHtmlBulk(e.message)}</span>`;
+  }
+  genBtn.disabled = false;
+}
 
 start();
 </script>
