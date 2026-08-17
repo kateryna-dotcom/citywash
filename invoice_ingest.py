@@ -201,6 +201,65 @@ def parse_hadarrosen(text: str) -> list:
             "description": (m.group("desc").strip() + " " + m.group("scent").strip()).strip(),
             "quantity": qty, "unit_price": price, "total": total, "confident": confident,
         })
+    if items:
+        return items
+    # Some hadarrosen invoices (e.g. wiper-blade orders) use a completely
+    # different layout -- no barcode column, and it's not the scent-product
+    # template the regex above was built from. Try that format too before
+    # giving up.
+    return parse_hadarrosen_wipers(text)
+
+
+# hadarrosen.com, second layout seen on some invoices (e.g. wiper blades):
+# no barcode column, short internal item codes instead. Each row is
+# "<row#><8-digit item code><description><qty><price> ₪<total> ₪" with the
+# qty and price digits glued together (e.g. "2014.30" = qty 20, price
+# 14.30) -- ambiguous from the digits alone, so every split point is tried
+# and the one whose qty*price reconciles with the printed total wins.
+_HADARROSEN_WIPER_ROW_RE = re.compile(
+    r'(?P<leading>\d{7,11})'
+    r'(?P<desc>[^\d₪]+?)'
+    r'(?P<numblock>\d+\.\d{2})\s*₪\s*'
+    r'(?P<total>[\d,]+\.\d{2})\s*₪'
+)
+_HADARROSEN_WIPER_HEADER = "מס' פריט"
+
+
+def _split_glued_qty_price(numblock: str, total):
+    """numblock is qty and price digits glued with no separator (only the
+    final 2 digits after the decimal point are unambiguously price's
+    cents). Tries every place the qty/price boundary could be and keeps
+    the one whose product reconciles with the row's printed total."""
+    if total is None or "." not in numblock:
+        return None, None
+    int_part, cents = numblock.split(".")
+    for i in range(1, len(int_part)):
+        qty, price = _num(int_part[:i]), _num(f"{int_part[i:]}.{cents}")
+        if qty is None or price is None:
+            continue
+        if abs(round(qty * price, 2) - total) < 0.5:
+            return qty, price
+    return None, None
+
+
+def parse_hadarrosen_wipers(text: str) -> list:
+    start_idx = text.find(_HADARROSEN_WIPER_HEADER)
+    if start_idx == -1:
+        return []
+    end_m = re.search(r'סה"כ\d', text[start_idx:])
+    end = start_idx + end_m.start() if end_m else len(text)
+    section = text[start_idx:end]
+
+    items = []
+    for m in _HADARROSEN_WIPER_ROW_RE.finditer(section):
+        total = _num(m.group("total"))
+        qty, price = _split_glued_qty_price(m.group("numblock"), total)
+        items.append({
+            "sku": m.group("leading")[-8:],
+            "description": m.group("desc").strip(),
+            "quantity": qty, "unit_price": price, "total": total,
+            "confident": qty is not None and price is not None,
+        })
     return items
 
 
