@@ -109,6 +109,14 @@ def list_branches() -> list:
             return [r[0] for r in cur.fetchall()]
 
 
+def get_record(record_id: int) -> dict:
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM invoice_records WHERE id=%s", (record_id,))
+            row = cur.fetchone()
+    return dict(row) if row else None
+
+
 def update_line_item(record_id: int, item_index: int, updates: dict):
     """Merges `updates` into line_items[item_index] for one invoice record
     (used e.g. to mark a low-confidence / price-mismatch item as resolved
