@@ -1,3 +1,4 @@
+
 """
 Standalone web page (no WhatsApp/Meta/Telegram needed) that looks like a
 WhatsApp chat and generates HR documents for א.ב.ת. שירותי שטיפה:
@@ -43,6 +44,7 @@ import pension_companies
 import branches
 import invoice_store
 import invoice_ingest
+import suppliers
 import item_matcher
 import item_mapping_store
 import catalog_store
@@ -658,6 +660,16 @@ def inventory_branches(request: Request):
         return invoice_store.list_branches()
     except Exception as e:  # noqa: BLE001
         return Response(f"Error loading branches: {e}", status_code=500)
+
+
+@app.get("/api/inventory/supplier-names")
+def inventory_supplier_names(request: Request):
+    """supplier_domain -> friendly Hebrew name, so the מלАי supplier filter
+    can show real names instead of raw email domains."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    return suppliers.SUPPLIER_CASHONTAB_NAMES
 
 
 @app.get("/api/inventory/branch-options")
