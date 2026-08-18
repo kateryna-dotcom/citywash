@@ -198,3 +198,14 @@ def update_status(record_id: int, status: str, note: str = None):
                 UPDATE invoice_records SET status=%s, note=%s, updated_at=now() WHERE id=%s
             """, (status, note, record_id))
         conn.commit()
+
+
+def delete_record(record_id: int):
+    """Removes an invoice card from the review list entirely (e.g. she
+    doesn't need it -- a duplicate, or not relevant to her). Does not
+    touch item_mappings, so anything already learned from this invoice's
+    line items stays intact."""
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM invoice_records WHERE id=%s", (record_id,))
+        conn.commit()
