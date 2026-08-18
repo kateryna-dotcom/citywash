@@ -43,6 +43,12 @@
   .dot.green { background: var(--green); }
   .card-title { font-weight: 700; font-size: 15px; }
   .card-sub { color: #5b7186; font-size: 13px; margin-top: 3px; }
+  .card-top-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .card-delete-btn {
+    background: none; border: none; color: #a7b6c4; font-size: 20px; line-height: 1;
+    cursor: pointer; padding: 2px 5px; border-radius: 5px;
+  }
+  .card-delete-btn:hover { color: #fff; background: var(--red); }
   .badge { font-size: 12px; padding: 3px 10px; border-radius: 20px; font-weight: 600; white-space: nowrap; }
   .badge.needs-review { background: var(--red); color: #fff; }
   .badge.ok { background: var(--green); color: #fff; }
@@ -64,14 +70,24 @@
   .match-badge.warn { background: #fff4e0; color: #a86a00; }
   .match-badge.bad { background: var(--red-light); color: var(--red); }
   .match-badge.skip { background: #eee; color: #777; }
-  .match-resolve { display: flex; gap: 4px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
+  .match-resolve-wrap { margin-top: 4px; }
+  .match-resolve { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
   .match-resolve input {
-    width: 120px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 5px;
-    font-size: 12px; font-family: inherit; direction: ltr; text-align: left;
+    width: 220px; padding: 3px 6px; border: 1px solid var(--border); border-radius: 5px;
+    font-size: 12px; font-family: inherit;
   }
   .match-resolve .btn.tiny { padding: 3px 9px; font-size: 11.5px; border-radius: 5px; }
   .match-resolve .btn.tiny.skip-btn { background: #fff; color: var(--red); border: 1px solid var(--red); }
   .match-err { color: var(--red); font-size: 11px; margin-top: 2px; }
+  .match-results { margin-top: 3px; max-width: 320px; }
+  .match-results .result-row {
+    padding: 4px 8px; font-size: 12px; border: 1px solid var(--border); border-top: none;
+    background: #fff; cursor: pointer;
+  }
+  .match-results .result-row:first-child { border-top: 1px solid var(--border); border-radius: 5px 5px 0 0; }
+  .match-results .result-row:last-child { border-radius: 0 0 5px 5px; }
+  .match-results .result-row:hover { background: var(--blue-light); }
+  .match-results .result-code { color: #5b7186; font-size: 11px; direction: ltr; display: inline-block; }
   .card-actions { margin-top: 10px; display: flex; gap: 8px; align-items: center; }
   .branch-picker {
     padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px;
@@ -206,7 +222,10 @@ async function loadRecords() {
             </div>
           </div>
         </div>
-        <span class="badge ${isReview ? 'needs-review' : (r.status === 'ok' ? 'ok' : 'no-pdf')}">${escapeHtml(badgeLabel)}</span>
+        <div class="card-top-right">
+          <span class="badge ${isReview ? 'needs-review' : (r.status === 'ok' ? 'ok' : 'no-pdf')}">${escapeHtml(badgeLabel)}</span>
+          <button class="card-delete-btn" title="מחק/י חשבונית זו" onclick="event.stopPropagation(); deleteRecord(${r.id})">✕</button>
+        </div>
       </div>
       ${itemsTable}
       <button class="toggle-raw" onclick="event.stopPropagation(); toggleRaw(${r.id})">הצג/הסתר טקסט מקורי</button>
@@ -249,16 +268,20 @@ function matchCell(recordId, idx, it) {
 
 function fixToggle(recordId, idx) {
   const cellId = `match-${recordId}-${idx}`;
-  return `<button class="toggle-raw" style="font-size:11px;" onclick="event.stopPropagation(); document.getElementById('${cellId}').style.display='flex';document.getElementById('${cellId}-toggle').style.display='none';">✏️ לא נכון? תקן</button><span id="${cellId}-toggle" style="display:none"></span>`;
+  return `<button class="toggle-raw" style="font-size:11px;" onclick="event.stopPropagation(); document.getElementById('${cellId}-wrap').style.display='block'; this.style.display='none';">✏️ לא נכון? תקן</button>`;
 }
 
 function matchResolveInput(recordId, idx, hidden) {
   const cellId = `match-${recordId}-${idx}`;
   return `
-    <div class="match-resolve" id="${cellId}" onclick="event.stopPropagation()" ${hidden ? 'style="display:none"' : ''}>
-      <input type="text" placeholder="ברקוד המוצר" id="${cellId}-input">
-      <button class="btn tiny" onclick="matchItemBarcode(${recordId}, ${idx}, '${cellId}')">✓ הזן</button>
-      <button class="btn tiny skip-btn" onclick="skipItemMatch(${recordId}, ${idx}, '${cellId}')">✗ לא להכניס</button>
+    <div class="match-resolve-wrap" id="${cellId}-wrap" ${hidden ? 'style="display:none"' : ''} onclick="event.stopPropagation()">
+      <div class="match-resolve" id="${cellId}">
+        <input type="text" placeholder="חפשי לפי שם (למשל TITANIUM 14) או הזיני ברקוד" id="${cellId}-input"
+               oninput="searchCatalogDebounced(${recordId}, ${idx}, '${cellId}')">
+        <button class="btn tiny" onclick="matchItemBarcode(${recordId}, ${idx}, '${cellId}')">✓ הזן</button>
+        <button class="btn tiny skip-btn" onclick="skipItemMatch(${recordId}, ${idx}, '${cellId}')">✗ לא להכניס</button>
+      </div>
+      <div class="match-results" id="${cellId}-results"></div>
     </div>
     <div class="match-err" id="${cellId}-err"></div>
   `;
@@ -283,6 +306,34 @@ async function matchItemBarcode(recordId, idx, cellId, force) {
     return;
   }
   errEl.textContent = await res.text();
+}
+
+const _searchTimers = {};
+
+function searchCatalogDebounced(recordId, idx, cellId) {
+  clearTimeout(_searchTimers[cellId]);
+  _searchTimers[cellId] = setTimeout(() => runCatalogSearch(recordId, idx, cellId), 300);
+}
+
+async function runCatalogSearch(recordId, idx, cellId) {
+  const input = document.getElementById(`${cellId}-input`);
+  const resultsEl = document.getElementById(`${cellId}-results`);
+  const q = (input.value || "").trim();
+  if (q.length < 2) { resultsEl.innerHTML = ""; return; }
+  const res = await fetch(`/api/inventory/search-catalog?q=${encodeURIComponent(q)}`);
+  if (!res.ok) return;
+  const results = await res.json();
+  resultsEl.innerHTML = results.map(it => `
+    <div class="result-row" onclick="pickCatalogResult(${recordId}, ${idx}, '${cellId}', ${JSON.stringify(it.code)})">
+      ${escapeHtml(it.name)} <span class="result-code">· ${escapeHtml(it.code)}${it.barcode ? " / " + escapeHtml(it.barcode) : ""}</span>
+    </div>
+  `).join("") || `<div class="result-row" style="cursor:default;color:#5b7186;">אין תוצאות</div>`;
+}
+
+function pickCatalogResult(recordId, idx, cellId, code) {
+  document.getElementById(`${cellId}-input`).value = code;
+  document.getElementById(`${cellId}-results`).innerHTML = "";
+  matchItemBarcode(recordId, idx, cellId);
 }
 
 async function skipItemMatch(recordId, idx, cellId) {
@@ -314,6 +365,13 @@ async function markOk(id) {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "ok" }),
   });
   if (res.ok) loadRecords();
+}
+
+async function deleteRecord(id) {
+  if (!confirm("למחוק את החשבונית הזו מהרשימה? הפעולה לא ניתנת לביטול (התאמות מוצרים שכבר נלמדו ממנה יישארו).")) return;
+  const res = await fetch(`/api/inventory/delete/${id}`, { method: "POST" });
+  if (res.ok) loadRecords();
+  else alert("שגיאה במחיקה: " + (await res.text()));
 }
 
 async function reparseInvoice(id) {
