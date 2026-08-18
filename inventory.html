@@ -115,10 +115,22 @@
       <select id="branchFilter" onchange="loadRecords()">
         <option value="">כל הסניפים</option>
       </select>
+      <select id="supplierFilter" onchange="applyFiltersAndRender()">
+        <option value="">כל הספקים</option>
+      </select>
+      <label class="status-msg" style="margin-inline-start:4px;">מתאריך:
+        <input type="date" id="dateFrom" onchange="applyFiltersAndRender()">
+      </label>
+      <label class="status-msg">עד תאריך:
+        <input type="date" id="dateTo" onchange="applyFiltersAndRender()">
+      </label>
+      <button class="btn secondary" onclick="clearFilters()">נקה סינון</button>
       <button class="btn secondary" onclick="checkNow()">🔄 בדוק עכשיו</button>
       <span id="statusMsg" class="status-msg"></span>
     </div>
   </div>
+
+  <div class="catalog-sync" id="summaryBar"></div>
 
   <div class="catalog-sync">
     <strong>קטלוג מוצרים (Cash On Tab):</strong>
@@ -159,20 +171,77 @@ async function loadBranches() {
   sel.value = current;
 }
 
+let RAW_RECORDS = [];
+let SUPPLIER_NAMES = {};
+
+async function loadSupplierNames() {
+  const res = await fetch("/api/inventory/supplier-names");
+  if (res.ok) SUPPLIER_NAMES = await res.json();
+}
+
 async function loadRecords() {
   const branch = document.getElementById("branchFilter").value;
   const url = branch ? `/api/inventory/list?branch=${encodeURIComponent(branch)}` : "/api/inventory/list";
   const res = await fetch(url);
-  const cardsEl = document.getElementById("cards");
   if (!res.ok) {
-    cardsEl.innerHTML = "";
+    document.getElementById("cards").innerHTML = "";
     document.getElementById("emptyMsg").style.display = "block";
     document.getElementById("emptyMsg").textContent = "שגיאה בטעינה: " + (await res.text());
+    document.getElementById("summaryBar").innerHTML = "";
     return;
   }
-  const records = await res.json();
+  RAW_RECORDS = await res.json();
+  populateSupplierFilter();
+  applyFiltersAndRender();
+}
+
+function populateSupplierFilter() {
+  const sel = document.getElementById("supplierFilter");
+  const current = sel.value;
+  const domains = [...new Set(RAW_RECORDS.map(r => r.supplier_domain).filter(Boolean))].sort();
+  sel.innerHTML = '<option value="">כל הספקים</option>' +
+    domains.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(SUPPLIER_NAMES[d] || d)}</option>`).join("");
+  sel.value = current;
+}
+
+// received_at as local YYYY-MM-DD, to compare against <input type=date> values.
+function recordDateStr(r) {
+  if (!r.received_at) return null;
+  const d = new Date(r.received_at);
+  const pad = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function applyFiltersAndRender() {
+  const supplier = document.getElementById("supplierFilter").value;
+  const dateFrom = document.getElementById("dateFrom").value;
+  const dateTo = document.getElementById("dateTo").value;
+
+  let records = RAW_RECORDS;
+  if (supplier) records = records.filter(r => r.supplier_domain === supplier);
+  if (dateFrom) records = records.filter(r => { const d = recordDateStr(r); return d && d >= dateFrom; });
+  if (dateTo) records = records.filter(r => { const d = recordDateStr(r); return d && d <= dateTo; });
+
+  renderCards(records);
+  renderSummary(records);
+}
+
+function renderSummary(records) {
+  const bar = document.getElementById("summaryBar");
+  if (!RAW_RECORDS.length) { bar.innerHTML = ""; return; }
+  let total = 0;
+  records.forEach(r => (r.line_items || []).forEach(it => { total += Number(it.total) || 0; }));
+  const totalStr = total.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  bar.innerHTML = `מציג <strong>${records.length}</strong> חשבוניות מתוך ${RAW_RECORDS.length} &nbsp;·&nbsp; סה"כ מוצג: <strong>₪${totalStr}</strong>`;
+}
+
+function renderCards(records) {
+  const cardsEl = document.getElementById("cards");
   cardsEl.innerHTML = "";
   document.getElementById("emptyMsg").style.display = records.length ? "none" : "block";
+  document.getElementById("emptyMsg").textContent = RAW_RECORDS.length
+    ? "אין חשבוניות התואמות את הסינון שנבחר."
+    : 'אין עדיין חשבוניות. לחצי על "בדוק עכשיו" כדי לבדוק את המייל.';
 
   records.forEach(r => {
     const isReview = r.status === "needs_review" || r.status === "no_pdf_found";
@@ -463,7 +532,14 @@ function syncCatalogFile(file) {
   reader.readAsArrayBuffer(file);
 }
 
-loadBranchOptions().then(loadRecords);
+function clearFilters() {
+  document.getElementById("supplierFilter").value = "";
+  document.getElementById("dateFrom").value = "";
+  document.getElementById("dateTo").value = "";
+  applyFiltersAndRender();
+}
+
+loadSupplierNames().then(() => loadBranchOptions().then(loadRecords));
 loadBranches();
 loadCatalogStatus();
 </script>
