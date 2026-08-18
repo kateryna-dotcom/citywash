@@ -938,6 +938,22 @@ async def inventory_mark(record_id: int, request: Request):
     return {"status": "updated"}
 
 
+@app.post("/api/inventory/delete/{record_id}")
+def inventory_delete(record_id: int, request: Request):
+    """Removes an invoice card from the מלАי review list entirely -- for
+    ones she doesn't need there (duplicates, irrelevant, already handled
+    another way). Doesn't touch anything already learned in item_mappings
+    from this invoice's line items."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        invoice_store.delete_record(record_id)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error deleting record: {e}", status_code=500)
+    return {"status": "deleted"}
+
+
 @app.get("/health")
 def health():
     return {"status": "alive"}
