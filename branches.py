@@ -39,6 +39,18 @@ BRANCHES = [
     "בית שמש",
 ]
 
+# Not real Cash On Tab branches -- expense categories Kateryna wants to file
+# a חשבונית under so its cost shows up in the מלАי totals when she filters
+# by them, without the invoice ever being entered into Cash On Tab (it has
+# no matching סניף there to receive goods into). Kept separate from BRANCHES
+# so detect_branch() never guesses one of these from invoice text, and so
+# ready-for-entry can exclude them explicitly.
+NON_INVENTORY_CATEGORIES = [
+    "וואש פוינט",
+    "השכורות",
+    "שונה",
+]
+
 
 def detect_branch(text: str) -> str | None:
     """Best-effort guess at which branch an invoice belongs to, by checking

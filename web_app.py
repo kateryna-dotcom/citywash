@@ -659,7 +659,12 @@ def inventory_ready_for_entry(request: Request):
     entering goods receipts into Cash On Tab's מלאי screens needs, with
     nothing left to guess: skipped items are left out, and any invoice with
     a line item still needing confirmation is left out entirely rather than
-    risking a partial/wrong entry. See docs/cashontab-entry-playbook.md."""
+    risking a partial/wrong entry. See docs/cashontab-entry-playbook.md.
+
+    Invoices filed under a non-inventory category (branches.NON_INVENTORY_CATEGORIES
+    -- וואש פוינט / השכורות / שונה) are excluded too: those are expense
+    buckets Kateryna tracks for their total cost, not real Cash On Tab
+    branches, so there's nothing to key in."""
     unauthorized = _require_api_auth(request)
     if unauthorized:
         return unauthorized
@@ -667,6 +672,8 @@ def inventory_ready_for_entry(request: Request):
         out = []
         for r in invoice_store.list_records():
             if r["status"] != "needs_review" or not r.get("branch"):
+                continue
+            if r["branch"] in branches.NON_INVENTORY_CATEGORIES:
                 continue
             entries = []
             blocked = False
@@ -721,12 +728,16 @@ def inventory_supplier_names(request: Request):
 
 @app.get("/api/inventory/branch-options")
 def inventory_branch_options(request: Request):
-    """Canonical branch list (matches the Cash On Tab dropdown), used to
-    populate the editable branch picker on each invoice card."""
+    """Canonical branch list (matches the Cash On Tab dropdown) plus the
+    non-inventory expense categories (וואש פוינט / השכורות / שונה) -- used to
+    populate the editable branch picker on each invoice card. An invoice
+    filed under one of the categories still shows up (and totals) in the
+    branch filter, it's just excluded from /api/inventory/ready-for-entry
+    since there's no real Cash On Tab branch to enter it into."""
     unauthorized = _require_api_auth(request)
     if unauthorized:
         return unauthorized
-    return branches.BRANCHES
+    return branches.BRANCHES + branches.NON_INVENTORY_CATEGORIES
 
 
 @app.post("/api/inventory/set-branch/{record_id}")
