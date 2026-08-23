@@ -651,6 +651,60 @@ def inventory_list(request: Request, branch: str = None):
         return Response(f"Error loading invoice records: {e}", status_code=500)
 
 
+@app.get("/api/inventory/ready-for-entry")
+def inventory_ready_for_entry(request: Request):
+    """Invoices that are fully reviewed -- branch assigned, every line item
+    either matched to a Cash On Tab product code or explicitly skipped --
+    but not yet marked "ok". This is the exact list a browser session
+    entering goods receipts into Cash On Tab's מלאי screens needs, with
+    nothing left to guess: skipped items are left out, and any invoice with
+    a line item still needing confirmation is left out entirely rather than
+    risking a partial/wrong entry. See docs/cashontab-entry-playbook.md.
+
+    Invoices filed under a non-inventory category (branches.NON_INVENTORY_CATEGORIES
+    -- וואש פוינט / השכורות / שונה) are excluded too: those are expense
+    buckets Kateryna tracks for their total cost, not real Cash On Tab
+    branches, so there's nothing to key in."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        out = []
+        for r in invoice_store.list_records():
+            if r["status"] != "needs_review" or not r.get("branch"):
+                continue
+            if r["branch"] in branches.NON_INVENTORY_CATEGORIES:
+                continue
+            entries = []
+            blocked = False
+            for it in r.get("line_items") or []:
+                if it.get("match_source") == "skip":
+                    continue
+                if it.get("needs_confirmation", True):
+                    blocked = True
+                    break
+                entries.append({
+                    "code": it.get("matched_code"),
+                    "name": it.get("matched_name") or it.get("description"),
+                    "quantity": it.get("quantity"),
+                    "unit_price": it.get("unit_price"),
+                })
+            if blocked or not entries:
+                continue
+            out.append({
+                "id": r["id"],
+                "branch": r["branch"],
+                "supplier_domain": r.get("supplier_domain"),
+                "supplier_name": suppliers.SUPPLIER_CASHONTAB_NAMES.get(r.get("supplier_domain")),
+                "invoice_number": r.get("invoice_number"),
+                "received_at": r.get("received_at"),
+                "items": entries,
+            })
+        return out
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error loading ready-for-entry invoices: {e}", status_code=500)
+
+
 @app.get("/api/inventory/branches")
 def inventory_branches(request: Request):
     unauthorized = _require_api_auth(request)
@@ -674,12 +728,16 @@ def inventory_supplier_names(request: Request):
 
 @app.get("/api/inventory/branch-options")
 def inventory_branch_options(request: Request):
-    """Canonical branch list (matches the Cash On Tab dropdown), used to
-    populate the editable branch picker on each invoice card."""
+    """Canonical branch list (matches the Cash On Tab dropdown) plus the
+    non-inventory expense categories (וואש פוינט / השכורות / שונה) -- used to
+    populate the editable branch picker on each invoice card. An invoice
+    filed under one of the categories still shows up (and totals) in the
+    branch filter, it's just excluded from /api/inventory/ready-for-entry
+    since there's no real Cash On Tab branch to enter it into."""
     unauthorized = _require_api_auth(request)
     if unauthorized:
         return unauthorized
-    return branches.BRANCHES
+    return branches.BRANCHES + branches.NON_INVENTORY_CATEGORIES
 
 
 @app.post("/api/inventory/set-branch/{record_id}")
