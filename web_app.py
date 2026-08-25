@@ -26,7 +26,7 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, Request, UploadFile, File
 from typing import List
-from fastapi.responses import HTMLResponse, Response, RedirectResponse
+from fastapi.responses import HTMLResponse, Response, RedirectResponse, JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from contract_filler import (
@@ -48,6 +48,7 @@ import suppliers
 import item_matcher
 import item_mapping_store
 import catalog_store
+import cashontab_bot
 
 # doc_type keys that support the "send for SMS signature" option -- each of
 # these templates has an invisible marker (§) placed at the signature spot.
@@ -651,6 +652,43 @@ def inventory_list(request: Request, branch: str = None):
         return Response(f"Error loading invoice records: {e}", status_code=500)
 
 
+def _ready_for_entry_shape(r: dict) -> dict | None:
+    """None if this invoice record isn't ready to key into Cash On Tab yet
+    (branch missing/a non-inventory category, or any line item still
+    unmatched) -- otherwise the {id, branch, supplier_name, invoice_number,
+    items} shape both /api/inventory/ready-for-entry and
+    /api/inventory/auto-enter build on. Skipped line items are left out;
+    an invoice with a line item still needing confirmation returns None
+    entirely rather than a partial result."""
+    if r["status"] != "needs_review" or not r.get("branch"):
+        return None
+    if r["branch"] in branches.NON_INVENTORY_CATEGORIES:
+        return None
+    entries = []
+    for it in r.get("line_items") or []:
+        if it.get("match_source") == "skip":
+            continue
+        if it.get("needs_confirmation", True):
+            return None
+        entries.append({
+            "code": it.get("matched_code"),
+            "name": it.get("matched_name") or it.get("description"),
+            "quantity": it.get("quantity"),
+            "unit_price": it.get("unit_price"),
+        })
+    if not entries:
+        return None
+    return {
+        "id": r["id"],
+        "branch": r["branch"],
+        "supplier_domain": r.get("supplier_domain"),
+        "supplier_name": suppliers.SUPPLIER_CASHONTAB_NAMES.get(r.get("supplier_domain")),
+        "invoice_number": r.get("invoice_number"),
+        "received_at": r.get("received_at"),
+        "items": entries,
+    }
+
+
 @app.get("/api/inventory/ready-for-entry")
 def inventory_ready_for_entry(request: Request):
     """Invoices that are fully reviewed -- branch assigned, every line item
@@ -671,38 +709,43 @@ def inventory_ready_for_entry(request: Request):
     try:
         out = []
         for r in invoice_store.list_records():
-            if r["status"] != "needs_review" or not r.get("branch"):
-                continue
-            if r["branch"] in branches.NON_INVENTORY_CATEGORIES:
-                continue
-            entries = []
-            blocked = False
-            for it in r.get("line_items") or []:
-                if it.get("match_source") == "skip":
-                    continue
-                if it.get("needs_confirmation", True):
-                    blocked = True
-                    break
-                entries.append({
-                    "code": it.get("matched_code"),
-                    "name": it.get("matched_name") or it.get("description"),
-                    "quantity": it.get("quantity"),
-                    "unit_price": it.get("unit_price"),
-                })
-            if blocked or not entries:
-                continue
-            out.append({
-                "id": r["id"],
-                "branch": r["branch"],
-                "supplier_domain": r.get("supplier_domain"),
-                "supplier_name": suppliers.SUPPLIER_CASHONTAB_NAMES.get(r.get("supplier_domain")),
-                "invoice_number": r.get("invoice_number"),
-                "received_at": r.get("received_at"),
-                "items": entries,
-            })
+            entry = _ready_for_entry_shape(r)
+            if entry:
+                out.append(entry)
         return out
     except Exception as e:  # noqa: BLE001
         return Response(f"Error loading ready-for-entry invoices: {e}", status_code=500)
+
+
+@app.post("/api/inventory/auto-enter/{record_id}")
+def inventory_auto_enter(record_id: int, request: Request):
+    """The server-side path Kateryna chose over the browser-supervised one
+    (see docs/cashontab-entry-playbook.md): logs into Cash On Tab itself
+    (cashontab_bot.py, headless Chromium) and creates the ת.מ. רכש document
+    for this one invoice, then marks it "ok" here on success. On any
+    ambiguity cashontab_bot.py refuses to guess and raises instead -- the
+    error (with a screenshot of whatever Cash On Tab screen it was on)
+    comes back as-is rather than silently leaving a half-entered document."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    record = invoice_store.get_record(record_id)
+    if not record:
+        return Response("Invoice record not found", status_code=404)
+    entry = _ready_for_entry_shape(record)
+    if not entry:
+        return Response("This invoice isn't ready for entry (branch/items not fully confirmed)", status_code=400)
+    try:
+        cashontab_bot.enter_invoice(entry)
+    except cashontab_bot.CashOnTabError as e:
+        return JSONResponse(
+            {"error": str(e), "screenshot_b64": e.screenshot_b64},
+            status_code=502,
+        )
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Unexpected error entering invoice: {e}", status_code=500)
+    invoice_store.update_status(record_id, "ok")
+    return {"status": "created"}
 
 
 @app.get("/api/inventory/branches")
