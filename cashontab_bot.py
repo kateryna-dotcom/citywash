@@ -176,11 +176,14 @@ def enter_invoice(invoice: dict) -> dict:
         try:
             _login(page, company, username, password)
 
+            # The nav link to this screen is an unlabeled icon (no accessible
+            # text to click by) -- going straight to the real URL instead,
+            # confirmed from Kateryna's own browser address bar on 2026-08-26.
+            page.goto(f"{BASE_URL}/documents", timeout=_TIMEOUT_MS)
             try:
-                page.get_by_role("button", name="יצירת מסמך").click(timeout=_TIMEOUT_MS)
                 page.get_by_role("button", name="ת.מ. רכש", exact=True).click(timeout=_TIMEOUT_MS)
             except PlaywrightTimeoutError:
-                _fail(page, 'לא נמצא כפתור "יצירת מסמך" / "ת.מ. רכש" -- ייתכן שהניווט אחרי הכניסה שונה ממה שתוכנת')
+                _fail(page, 'הגעתי ל-/documents אבל לא נמצא כפתור "ת.מ. רכש"')
 
             _open_picker_near_label(page, "מחסן")
             _pick_unique_search_result(page, "מחסן", invoice["branch"])
