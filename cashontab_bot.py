@@ -93,22 +93,23 @@ def _login(page, company, username, password):
 
 def _open_picker_near_label(page, input_placeholder):
     """מחסן / קוד ספק both open their search dialog via a small button (an
-    Ant Design Input.Search enterButton) that lives in the SAME
-    `span.ant-input-group` as the field's own input -- confirmed via
-    DevTools directly on the מחסן field on 2026-08-26: the input's
-    immediate parent is `span.ant-input-wrapper.ant-input-group`, with the
-    button inside a sibling `span.ant-input-group-addon` in that same
-    group. Anchoring on the input's placeholder (tight, unambiguous) rather
-    than the field's label -- which sits in a completely different subtree
-    (ant-form-item-label) -- and rather than the enclosing div.ant-row,
-    which two earlier attempts scoped to and both still failed to find a
-    clickable button in."""
+    Ant Design Input.Search with a custom ellipsis enterButton) that lives
+    in the SAME `span.ant-input-group` as the field's own input. Confirmed
+    precisely on the מחסן field on 2026-08-26 via Claude in Chrome reading
+    the live DOM with JS (document.querySelector), not a DevTools
+    screenshot -- the actual field is `input#search_storage_picker[
+    placeholder="קוד מחסן"]`, and its search-button addon (sibling of the
+    input's own wrapper inside that shared ant-input-group span) contains
+    `i.anticon-ellipsis`. Anchoring on the input's placeholder (id differs
+    per field, unlike placeholder) and clicking the button that contains
+    that specific icon, rather than just "the last button in the group" --
+    tighter now that the exact icon is confirmed rather than assumed."""
     input_el = page.get_by_placeholder(input_placeholder)
     group = input_el.locator(
         "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' ant-input-group ')][1]"
     )
     try:
-        group.get_by_role("button").last.click(timeout=_TIMEOUT_MS)
+        group.locator("button:has(.anticon-ellipsis)").click(timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
         _fail(page, f'לא נמצא כפתור החיפוש ליד השדה עם placeholder "{input_placeholder}"')
 
