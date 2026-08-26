@@ -176,8 +176,11 @@ def enter_invoice(invoice: dict) -> dict:
         try:
             _login(page, company, username, password)
 
-            page.get_by_role("button", name="יצירת מסמך").click(timeout=_TIMEOUT_MS)
-            page.get_by_role("button", name="ת.מ. רכש", exact=True).click(timeout=_TIMEOUT_MS)
+            try:
+                page.get_by_role("button", name="יצירת מסמך").click(timeout=_TIMEOUT_MS)
+                page.get_by_role("button", name="ת.מ. רכש", exact=True).click(timeout=_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                _fail(page, 'לא נמצא כפתור "יצירת מסמך" / "ת.מ. רכש" -- ייתכן שהניווט אחרי הכניסה שונה ממה שתוכנת')
 
             _open_picker_near_label(page, "מחסן")
             _pick_unique_search_result(page, "מחסן", invoice["branch"])
@@ -203,6 +206,12 @@ def enter_invoice(invoice: dict) -> dict:
                 page.wait_for_load_state("networkidle", timeout=_TIMEOUT_MS)
             except PlaywrightTimeoutError:
                 _fail(page, "לחיצה על \"צור מסמך\" לא הושלמה כצפוי")
+        except PlaywrightTimeoutError as e:
+            # Safety net for any step above that isn't individually wrapped --
+            # always attach a screenshot rather than let a raw timeout escape
+            # (see docs/cashontab-entry-playbook.md, first real run 2026-08-26,
+            # where a gap here meant no screenshot came back).
+            _fail(page, f"שלב לא צפוי בתהליך: {e}")
         finally:
             browser.close()
 
