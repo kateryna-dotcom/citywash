@@ -91,25 +91,26 @@ def _login(page, company, username, password):
         _fail(page, "לא הצלחתי למלא את מסך ההתחברות (קוד חברה / שם משתמש / סיסמה / התחבר)")
 
 
-def _open_picker_near_label(page, label_text):
-    """מחסן / קוד ספק both open their search dialog via a small button
-    (an Ant Design Input.Search enterButton) that sits in the same form row
-    as the field's label -- the row is a `div.ant-row` wrapping both the
-    label and the input+button, confirmed via DevTools on the מחסן row on
-    2026-08-26. Scopes to that row, then clicks its LAST button rather than
-    matching by visible text: what looked like "..." may be DevTools' own
-    collapsed-node notation rather than the button's real text (could be a
-    single "…" glyph, an icon with no text, etc.) -- matching by text on
-    that guess failed the first real run. The search button is the
-    right-most/last element in the row (label -> input -> edit icon ->
-    search button), so `.last` should hit it regardless of its real label."""
-    row = page.locator(f':text("{label_text}")').locator(
-        "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' ant-row ')][1]"
+def _open_picker_near_label(page, input_placeholder):
+    """מחסן / קוד ספק both open their search dialog via a small button (an
+    Ant Design Input.Search enterButton) that lives in the SAME
+    `span.ant-input-group` as the field's own input -- confirmed via
+    DevTools directly on the מחסן field on 2026-08-26: the input's
+    immediate parent is `span.ant-input-wrapper.ant-input-group`, with the
+    button inside a sibling `span.ant-input-group-addon` in that same
+    group. Anchoring on the input's placeholder (tight, unambiguous) rather
+    than the field's label -- which sits in a completely different subtree
+    (ant-form-item-label) -- and rather than the enclosing div.ant-row,
+    which two earlier attempts scoped to and both still failed to find a
+    clickable button in."""
+    input_el = page.get_by_placeholder(input_placeholder)
+    group = input_el.locator(
+        "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' ant-input-group ')][1]"
     )
     try:
-        row.get_by_role("button").last.click(timeout=_TIMEOUT_MS)
+        group.get_by_role("button").last.click(timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
-        _fail(page, f'לא נמצא כפתור החיפוש ("...") ליד השדה "{label_text}"')
+        _fail(page, f'לא נמצא כפתור החיפוש ליד השדה עם placeholder "{input_placeholder}"')
 
 
 def _pick_unique_search_result(page, what, query):
@@ -201,7 +202,7 @@ def enter_invoice(invoice: dict) -> dict:
             except PlaywrightTimeoutError:
                 _fail(page, 'נכנסתי ל"מסמכים" אבל לא נמצא כפתור "ת.מ. רכש"')
 
-            _open_picker_near_label(page, "מחסן")
+            _open_picker_near_label(page, "קוד מחסן")
             _pick_unique_search_result(page, "מחסן", invoice["branch"])
 
             _open_picker_near_label(page, "קוד ספק")
