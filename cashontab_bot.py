@@ -176,14 +176,22 @@ def enter_invoice(invoice: dict) -> dict:
         try:
             _login(page, company, username, password)
 
-            # The nav link to this screen is an unlabeled icon (no accessible
-            # text to click by) -- going straight to the real URL instead,
-            # confirmed from Kateryna's own browser address bar on 2026-08-26.
-            page.goto(f"{BASE_URL}/documents", timeout=_TIMEOUT_MS)
+            # Cash On Tab is an Ant Design SPA with client-side routing --
+            # hitting /documents as a direct URL 404s (confirmed 2026-08-26),
+            # so navigation has to go through the actual menu click, same as
+            # a human would. The right-rail nav is collapsed to icons only,
+            # but DevTools showed the underlying <li role="menuitem"> still
+            # carries its real label ("מסמכים") in a visually-collapsed
+            # <span>, which Playwright's accessible-name lookup still sees.
+            try:
+                page.get_by_role("menuitem", name="מסמכים").click(timeout=_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                _fail(page, 'לא נמצא פריט התפריט "מסמכים" (הניווט לעמוד יצירת המסמך)')
+
             try:
                 page.get_by_role("button", name="ת.מ. רכש", exact=True).click(timeout=_TIMEOUT_MS)
             except PlaywrightTimeoutError:
-                _fail(page, 'הגעתי ל-/documents אבל לא נמצא כפתור "ת.מ. רכש"')
+                _fail(page, 'נכנסתי ל"מסמכים" אבל לא נמצא כפתור "ת.מ. רכש"')
 
             _open_picker_near_label(page, "מחסן")
             _pick_unique_search_result(page, "מחסן", invoice["branch"])
