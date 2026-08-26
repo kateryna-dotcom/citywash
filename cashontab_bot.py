@@ -21,10 +21,11 @@ Env vars required (set in Render, never in git):
     CASHONTAB_PASSWORD
 
 IMPORTANT -- this was written from screenshots taken together with Kateryna
-on 2026-08-23, not from Cash On Tab's actual HTML (no API or browser access
-from the session that wrote it). Selectors favor visible Hebrew text/roles
-over guessed CSS classes/attribute names for that reason, but this is still
-a first draft: expect it to need a live debugging pass, especially the
+on 2026-08-23 (login screen added 2026-08-25), not from Cash On Tab's actual
+HTML (no API or browser access from the session that wrote it). Selectors
+favor visible Hebrew text/roles over guessed CSS classes/attribute names for
+that reason, but this is still a first draft, never run end-to-end against
+the live site: expect it to need a debugging pass, especially the
 per-line-item fields (_fill_line_item), which is the part seen the least
 clearly. On any unexpected screen this raises CashOnTabError with a
 screenshot of the page attached, so a failure can be diagnosed from a chat
@@ -73,18 +74,21 @@ def _fail(page, message):
 
 
 def _login(page, company, username, password):
-    """UNVERIFIED -- built from the logged-in dashboard's screenshots; the
-    actual login screen has never been seen by whoever wrote this. This is
-    the first thing to fix against the real site if the bot fails here."""
+    """Based on a real screenshot of the login screen ("התחברות למערכת"),
+    gathered 2026-08-25 -- not yet run end-to-end against the live site.
+    The company-code field has no placeholder of its own (the screenshot
+    showed it pre-filled with a remembered value from Kateryna's own
+    browser, which a fresh headless session won't have), so it's addressed
+    by position -- the first input on the page -- rather than by label."""
     page.goto(BASE_URL, timeout=_TIMEOUT_MS)
     try:
-        page.get_by_placeholder("קוד חברה").fill(str(company), timeout=_TIMEOUT_MS)
+        page.locator("input").first.fill(str(company), timeout=_TIMEOUT_MS)
         page.get_by_placeholder("שם משתמש").fill(username, timeout=_TIMEOUT_MS)
         page.get_by_placeholder("סיסמה").fill(password, timeout=_TIMEOUT_MS)
-        page.get_by_role("button", name="כניסה").click(timeout=_TIMEOUT_MS)
+        page.get_by_role("button", name="התחבר").click(timeout=_TIMEOUT_MS)
         page.wait_for_load_state("networkidle", timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
-        _fail(page, "לא נמצא מסך ההתחברות הצפוי -- כנראה שהוא שונה ממה שתוכנת")
+        _fail(page, "לא הצלחתי למלא את מסך ההתחברות (קוד חברה / שם משתמש / סיסמה / התחבר)")
 
 
 def _open_picker_near_label(page, label_text):
