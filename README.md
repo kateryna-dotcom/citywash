@@ -39,13 +39,18 @@
 - `employment_contract_template_ABT.docx`, `employment_contract_template_worker.docx`,
   `template_piturim.docx`, `template_shimua.docx`, `template_ishur_haaskaa.docx`,
   `template_betichut.docx`, `template_incident_notice.docx` — токенизированные шаблоны
-- `Dockerfile` — образ с Python + LibreOffice (нужен для конвертации в PDF)
+- `Dockerfile` — образ с Python + LibreOffice + headless Chromium (Chromium нужен
+  `cashontab_bot.py` для конвертации в PDF и автоматического входа в Cash On Tab)
 - `requirements.txt`
 - `whatsapp_bot_app.py`, `.env.example` — вариант с реальным WhatsApp (Meta Cloud API),
   на будущее, если решишь вернуться к нему — не обязателен для веб-версии
 - `docs/cashontab-entry-playbook.md` — как вводить проверенные накладные (מלАי)
-  в Cash On Tab через Claude в браузере (у Cash On Tab нет API, поэтому это
-  делается через уже залогиненную сессию в браузере, а не с сервера)
+  в Cash On Tab: и вручную через Claude в браузере, и автоматически
+- `cashontab_bot.py` — сам автоматический вход в Cash On Tab и заполнение
+  документа поступления товара (headless-браузер Playwright), вызывается
+  кнопкой "🤖 הכנס למלאי אוטומטית" в `inventory.html`. Требует
+  `CASHONTAB_COMPANY_CODE`/`CASHONTAB_USERNAME`/`CASHONTAB_PASSWORD` в
+  переменных окружения Render (никогда не в git)
 
 ## Как посмотреть локально (для проверки, не обязательно)
 

@@ -305,8 +305,12 @@ function renderCards(records) {
           <option value="">— לא נבחר —</option>
           ${branchOptions.map(b => `<option value="${escapeHtml(b)}" ${b === r.branch ? "selected" : ""}>${escapeHtml(b)}</option>`).join("")}
         </select>
-        ${isReview ? `<button class="btn small" onclick="markOk(${r.id})">✓ סימנתי כטופל</button>` : ""}
+        ${isReview ? `
+          <button class="btn small" onclick="markOk(${r.id})">✓ סימנתי כטופל</button>
+          <button class="btn small secondary" onclick="autoEnter(${r.id}, this)">🤖 הכנס למלאי אוטומטית</button>
+        ` : ""}
       </div>
+      <div id="autoenter-${r.id}"></div>
     `;
     cardsEl.appendChild(div);
   });
@@ -434,6 +438,34 @@ async function markOk(id) {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "ok" }),
   });
   if (res.ok) loadRecords();
+}
+
+async function autoEnter(id, btnEl) {
+  const errEl = document.getElementById(`autoenter-${id}`);
+  errEl.innerHTML = "";
+  btnEl.disabled = true;
+  const originalText = btnEl.textContent;
+  btnEl.textContent = "מבצע/ת בקאש און טאב...";
+  try {
+    const res = await fetch(`/api/inventory/auto-enter/${id}`, { method: "POST" });
+    if (res.ok) { await loadRecords(); return; }
+    let msg, screenshot = null;
+    if ((res.headers.get("content-type") || "").includes("application/json")) {
+      const data = await res.json();
+      msg = data.error || JSON.stringify(data);
+      screenshot = data.screenshot_b64;
+    } else {
+      msg = await res.text();
+    }
+    errEl.innerHTML = `<div class="match-err">שגיאה בהכנסה אוטומטית: ${escapeHtml(msg)}</div>` +
+      (screenshot ? `<img src="data:image/png;base64,${screenshot}" alt="מסך Cash On Tab בזמן השגיאה"
+         style="max-width:100%;border:1px solid var(--border);border-radius:6px;margin-top:6px;">` : "");
+  } catch (e) {
+    errEl.innerHTML = `<div class="match-err">שגיאת רשת: ${escapeHtml(String(e))}</div>`;
+  } finally {
+    btnEl.disabled = false;
+    btnEl.textContent = originalText;
+  }
 }
 
 async function deleteRecord(id) {
