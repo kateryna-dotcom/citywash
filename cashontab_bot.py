@@ -93,10 +93,14 @@ def _login(page, company, username, password):
 
 def _open_picker_near_label(page, label_text):
     """מחסן / קוד ספק both open their search dialog via a small '...' button
-    that sits in the same form row as the field's label. Scopes to the row
-    containing `label_text` rather than picking the first '...' on the page."""
+    (an Ant Design Input.Search enterButton) that sits in the same form row
+    as the field's label. Cash On Tab's forms are Ant Design, and each field
+    row is a `div.ant-row` wrapping both the label and the input+button --
+    confirmed via DevTools on the מחסן row on 2026-08-26 (a div.ant-row
+    exactly bounding label+input+button, nothing narrower or wider). Scopes
+    to that ancestor rather than picking the first '...' on the page."""
     row = page.locator(f':text("{label_text}")').locator(
-        "xpath=ancestor-or-self::*[self::tr or self::div][1]"
+        "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' ant-row ')][1]"
     )
     try:
         row.get_by_role("button", name="...").click(timeout=_TIMEOUT_MS)
