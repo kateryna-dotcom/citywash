@@ -92,18 +92,22 @@ def _login(page, company, username, password):
 
 
 def _open_picker_near_label(page, label_text):
-    """מחסן / קוד ספק both open their search dialog via a small '...' button
+    """מחסן / קוד ספק both open their search dialog via a small button
     (an Ant Design Input.Search enterButton) that sits in the same form row
-    as the field's label. Cash On Tab's forms are Ant Design, and each field
-    row is a `div.ant-row` wrapping both the label and the input+button --
-    confirmed via DevTools on the מחסן row on 2026-08-26 (a div.ant-row
-    exactly bounding label+input+button, nothing narrower or wider). Scopes
-    to that ancestor rather than picking the first '...' on the page."""
+    as the field's label -- the row is a `div.ant-row` wrapping both the
+    label and the input+button, confirmed via DevTools on the מחסן row on
+    2026-08-26. Scopes to that row, then clicks its LAST button rather than
+    matching by visible text: what looked like "..." may be DevTools' own
+    collapsed-node notation rather than the button's real text (could be a
+    single "…" glyph, an icon with no text, etc.) -- matching by text on
+    that guess failed the first real run. The search button is the
+    right-most/last element in the row (label -> input -> edit icon ->
+    search button), so `.last` should hit it regardless of its real label."""
     row = page.locator(f':text("{label_text}")').locator(
         "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' ant-row ')][1]"
     )
     try:
-        row.get_by_role("button", name="...").click(timeout=_TIMEOUT_MS)
+        row.get_by_role("button").last.click(timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
         _fail(page, f'לא נמצא כפתור החיפוש ("...") ליד השדה "{label_text}"')
 
