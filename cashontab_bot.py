@@ -433,9 +433,26 @@ def enter_invoice(invoice: dict) -> dict:
                     page.get_by_label(re.compile("^מסמך: ת\\.מ\\. רכש")) \
                         .get_by_role("button", name="צור והצג מסמך", exact=True) \
                         .click(timeout=_TIMEOUT_MS)
-                    page.wait_for_load_state("networkidle", timeout=_TIMEOUT_MS)
                 except PlaywrightTimeoutError:
                     _fail(page, "לחיצה על \"צור והצג מסמך\" הסופית לא הושלמה כצפוי")
+
+                # That click can pop an "אזהרה" (warning) confirm dialog --
+                # e.g. "פריט כפול בתעודה" (duplicate line item) -- which
+                # blocks the actual save until confirmed. Live run
+                # 2026-08-27: the outer click "succeeded" (no timeout) but
+                # nothing was ever saved, because this dialog was still
+                # sitting there waiting for its own "צור מסמך" to be
+                # pressed. Kateryna confirmed it's fine to just proceed
+                # through it. Best-effort/short timeout: most saves don't
+                # trigger this at all, so don't slow down or fail the run
+                # over it not appearing.
+                try:
+                    page.get_by_role("dialog").filter(has_text="אזהרה") \
+                        .get_by_role("button", name="צור מסמך", exact=True) \
+                        .click(timeout=3000)
+                except PlaywrightTimeoutError:
+                    pass
+                page.wait_for_load_state("networkidle", timeout=_TIMEOUT_MS)
 
                 # Verify the save actually happened instead of trusting a
                 # clean click -- live run 2026-08-27: the click and the
