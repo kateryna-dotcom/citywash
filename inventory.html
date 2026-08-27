@@ -308,6 +308,8 @@ function renderCards(records) {
         ${isReview ? `
           <button class="btn small" onclick="markOk(${r.id})">✓ סימנתי כטופל</button>
           <button class="btn small secondary" onclick="autoEnter(${r.id}, this)">🤖 הכנס למלאי אוטומטית</button>
+        ` : r.status === "ok" ? `
+          <button class="btn small secondary" onclick="revertToReview(${r.id})" title="השתמש/י אם סומן כטופל בטעות, או שהמסמך בקאש און טאב לא הושלם/בוטל בפועל">↺ החזר לבדיקה</button>
         ` : ""}
       </div>
       <div id="autoenter-${r.id}"></div>
@@ -436,6 +438,13 @@ async function resolveItem(recordId, itemIndex) {
 async function markOk(id) {
   const res = await fetch(`/api/inventory/mark/${id}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "ok" }),
+  });
+  if (res.ok) loadRecords();
+}
+
+async function revertToReview(id) {
+  const res = await fetch(`/api/inventory/mark/${id}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "needs_review" }),
   });
   if (res.ok) loadRecords();
 }
