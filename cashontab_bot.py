@@ -443,13 +443,27 @@ def enter_invoice(invoice: dict) -> dict:
                 # nothing was ever saved, because this dialog was still
                 # sitting there waiting for its own "צור מסמך" to be
                 # pressed. Kateryna confirmed it's fine to just proceed
-                # through it. Best-effort/short timeout: most saves don't
-                # trigger this at all, so don't slow down or fail the run
-                # over it not appearing.
+                # through it.
+                #
+                # A first attempt scoped this via get_by_role("dialog"),
+                # assuming Ant Design's Modal.confirm exposes the standard
+                # dialog role -- the identical failure recurred right
+                # after deploying that, so the role assumption was
+                # probably wrong (could be "alertdialog", or no ARIA role
+                # at all). Switched to the same text-then-ancestor pattern
+                # already proven elsewhere in this file (_fill_field_in_row):
+                # find the "אזהרה" text itself, then its nearest ant-modal
+                # ancestor, then the button inside that. Best-effort with a
+                # generous wait -- most saves don't trigger this dialog at
+                # all, so a miss here shouldn't fail or meaningfully slow
+                # down a normal run, but a slow render is more likely than
+                # a fast one for a popup like this.
                 try:
-                    page.get_by_role("dialog").filter(has_text="אזהרה") \
-                        .get_by_role("button", name="צור מסמך", exact=True) \
-                        .click(timeout=3000)
+                    warning_title = page.locator(':text-is("אזהרה")').first
+                    warning_title.wait_for(state="visible", timeout=5000)
+                    warning_title.locator(
+                        "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' ant-modal ')][1]"
+                    ).get_by_role("button", name="צור מסמך", exact=True).click(timeout=3000)
                 except PlaywrightTimeoutError:
                     pass
                 page.wait_for_load_state("networkidle", timeout=_TIMEOUT_MS)
