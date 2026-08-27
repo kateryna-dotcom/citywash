@@ -421,20 +421,26 @@ def enter_invoice(invoice: dict) -> dict:
 
                 # Final document save, at the bottom of the whole form
                 # (ביטול / הדפס טיוטה / צור מסמך / צור והצג מסמך / צור
-                # תבנית -- screenshot 2026-08-27). Kateryna confirmed
-                # 2026-08-27 that "צור מסמך" alone is NOT the right final
-                # action -- "צור והצג מסמך" (create *and show* the
-                # document) is what actually finalizes/saves it properly.
-                # Scoped to the document panel by its stable "מסמך: ת.מ.
-                # רכש" prefix (קופה name/code vary), same reasoning as
-                # before: a page-wide search risks matching more than one
-                # button with overlapping text.
+                # תבנית -- screenshot 2026-08-27). Kateryna first said
+                # "צור מסמך" alone wasn't the right final action and
+                # "צור והצג מסמך" was -- but a live DOM inspection
+                # 2026-08-27 (10 items entered correctly, still not
+                # finishing) showed "צור מסמך" is actually the primary
+                # half of a split-button (an adjacent sibling <button>
+                # with no text -- almost certainly a dropdown caret that
+                # "צור והצג מסמך" lives behind as a menu item, not a
+                # separately clickable button of its own). Kateryna
+                # confirmed clicking "צור מסמך" itself is correct and
+                # sufficient. Scoped to the document panel by its stable
+                # "מסמך: ת.מ. רכש" prefix (קופה name/code vary), same
+                # reasoning as before: a page-wide search risks matching
+                # more than one button with overlapping text.
                 try:
                     page.get_by_label(re.compile("^מסמך: ת\\.מ\\. רכש")) \
-                        .get_by_role("button", name="צור והצג מסמך", exact=True) \
+                        .get_by_role("button", name="צור מסמך", exact=True) \
                         .click(timeout=_TIMEOUT_MS)
                 except PlaywrightTimeoutError:
-                    _fail(page, "לחיצה על \"צור והצג מסמך\" הסופית לא הושלמה כצפוי")
+                    _fail(page, "לחיצה על \"צור מסמך\" הסופית לא הושלמה כצפוי")
 
                 # That click can pop an "אזהרה" (warning) confirm dialog --
                 # e.g. "פריט כפול בתעודה" (duplicate line item) -- which
