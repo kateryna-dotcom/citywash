@@ -173,6 +173,28 @@ def _pick_unique_search_result(page, what, query):
         _fail(page, f'נמצאה שורה מתאימה ל-"{query}" ({what}) אך לא נלחץ עליה כראוי')
 
 
+def _find_empty_item_row(page):
+    """Scans the items grid's <tr> rows from the end for the real, still-
+    unused data row -- see the row-targeting note in _fill_line_item's
+    docstring for why a fixed offset from the end isn't reliable once a
+    prior item has been saved."""
+    rows = page.locator("table tbody tr")
+    for i in range(rows.count() - 1, -1, -1):
+        tr = rows.nth(i)
+        cells = tr.locator("td")
+        if cells.count() < 10:
+            continue  # too few cells -- this is the הערה לפריט note row
+        code_input = cells.nth(1).locator("input")
+        if code_input.count() == 0:
+            continue
+        try:
+            if code_input.first.input_value(timeout=1000) == "":
+                return tr
+        except PlaywrightTimeoutError:
+            continue
+    _fail(page, "לא נמצאה שורת פריט ריקה להזנת הפריט הבא")
+
+
 def _fill_line_item(page, item):
     """LEAST VERIFIED PART OF THIS FILE. Items grid (tab פריטים): every item
     is actually a *pair* of <tr> rows -- the data row (קוד פריט, תיאור,
@@ -192,8 +214,18 @@ def _fill_line_item(page, item):
     the very end of enter_invoice (confirmed by Kateryna: שמור sits next to
     per-row grid/delete icons, screenshot 2026-08-27). מחיר לפני מע"מ is
     left as Cash On Tab's own default -- Kateryna confirmed 2026-08-27 the
-    invoice's unit_price should NOT overwrite it."""
-    row = page.locator("table tbody tr").nth(-2)
+    invoice's unit_price should NOT overwrite it.
+
+    Row targeting: a fixed nth(-2) (second-to-last <tr>) broke on the
+    *second* item -- Kateryna confirmed live 2026-08-27 that קוד פריט still
+    showed the *previous* item's code, meaning we were re-editing item 1's
+    now-saved row instead of a fresh one (its שמור button was then also
+    gone, matching the exact next error we'd been seeing). Once a row is
+    saved, the row layout after it isn't a reliable fixed offset -- so
+    instead scan from the end for a real data row (>=10 <td>, ruling out
+    the 1-wide-cell הערה לפריט note row) whose קוד פריט cell (index 1) is
+    still empty, i.e. actually unused."""
+    row = _find_empty_item_row(page)
     try:
         code_input = row.locator("input").first
         code_input.fill(item["code"], timeout=_TIMEOUT_MS)
