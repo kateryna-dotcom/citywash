@@ -345,8 +345,18 @@ def enter_invoice(invoice: dict) -> dict:
             # because this step was missing, not a wrong selector). The same
             # button text is pressed again at the very end to actually save
             # the filled-in document -- two different clicks, same label.
+            #
+            # Scoped to the document panel, not the whole page -- live run
+            # 2026-08-27 hit the same page-wide-vs-in-panel "צור מסמך"
+            # strict-mode ambiguity here that the final click already had
+            # to be scoped for (see there for the full explanation): the
+            # panel's own accessible label (matching header text "מסמך:
+            # ת.מ. רכש קופה: ... קוד קופה: ...") is apparently already
+            # present by this point too.
             try:
-                page.get_by_role("button", name="צור מסמך", exact=True).click(timeout=_TIMEOUT_MS)
+                page.get_by_label(re.compile("^מסמך: ת\\.מ\\. רכש")) \
+                    .get_by_role("button", name="צור מסמך", exact=True) \
+                    .click(timeout=_TIMEOUT_MS)
             except PlaywrightTimeoutError:
                 _fail(page, 'בחרתי "ת.מ. רכש" אבל לא נמצא כפתור "צור מסמך" הראשוני (לפתיחת הטופס)')
 
