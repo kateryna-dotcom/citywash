@@ -174,20 +174,21 @@ def _pick_unique_search_result(page, what, query):
 
 
 def _find_item_row(page):
-    """Returns the items grid's last real data row (>=10 <td>, ruling out
-    the 1-wide-cell הערה לפריט note row) -- see the row-targeting note in
-    _fill_line_item's docstring for why a fixed offset from the end isn't
-    reliable once a prior item has been saved.
+    """Returns the items grid's row to fill next: a real data row (>=10
+    <td>, ruling out the 1-wide-cell הערה לפריט note row) -- see the
+    row-targeting note in _fill_line_item's docstring for why a fixed
+    offset from the end isn't reliable once a prior item has been saved.
 
-    Used to require this row's קוד פריט to be empty (i.e. definitely
-    unused) before returning it, retrying while Cash On Tab rendered the
-    next row after a שמור click. That stopped working reliably on later
-    items (live run 2026-08-27, "no empty row found" even after retrying)
-    -- Cash On Tab doesn't reliably keep appending fresh empty rows past a
-    handful of items. So this no longer waits for emptiness: it just
-    returns the last data row, whatever is currently in it, and
-    _fill_line_item is responsible for clearing קוד פריט before typing the
-    new code into it (Kateryna's fix, 2026-08-27)."""
+    Strongly prefers a genuinely *empty* row (קוד פריט not yet filled),
+    retrying for a few seconds while Cash On Tab renders the next row
+    after a שמור click. Only reusing/clearing the last already-filled row
+    as a last resort (when no empty row ever appears) turned out unsafe --
+    live run 2026-08-27: re-typing a code into an *already-linked* row
+    didn't cleanly replace it, it duplicated that row with כמות/אריזות
+    both blown up to 999,999 and Cash On Tab itself flagged a duplicate
+    line ("פרט כפול בתעודה"). So don't reuse a non-empty row unless
+    retrying for an empty one has genuinely been exhausted."""
+    last_data_row = None
     for attempt in range(10):
         rows = page.locator("table tbody tr")
         for i in range(rows.count() - 1, -1, -1):
@@ -195,10 +196,20 @@ def _find_item_row(page):
             cells = tr.locator("td")
             if cells.count() < 10:
                 continue  # too few cells -- this is the הערה לפריט note row
-            if cells.nth(1).locator("input").count() > 0:
-                return tr
+            code_input = cells.nth(1).locator("input")
+            if code_input.count() == 0:
+                continue
+            if last_data_row is None:
+                last_data_row = tr
+            try:
+                if code_input.first.input_value(timeout=1000) == "":
+                    return tr
+            except PlaywrightTimeoutError:
+                pass
         if attempt < 9:
             page.wait_for_timeout(500)
+    if last_data_row is not None:
+        return last_data_row
     _fail(page, "לא נמצאה שורת פריט להזנת הפריט הבא")
 
 
