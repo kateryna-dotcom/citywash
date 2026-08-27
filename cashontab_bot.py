@@ -33,6 +33,7 @@ without anyone needing to be watching the browser when it happens.
 """
 import base64
 import os
+import re
 
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
@@ -131,6 +132,21 @@ def _open_picker_near_label(page, input_placeholder):
         group.locator("button:has(.anticon-ellipsis)").click(timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
         _fail(page, f'לא נמצא כפתור החיפוש ליד השדה עם placeholder "{input_placeholder}"')
+
+
+def _fill_field_in_row(page, label_text, value):
+    """Plain text fields with no search picker (e.g. מספר תעודת ספק) --
+    label and input share a `div.ant-row` the same way מחסן/קוד ספק do, but
+    the input itself has no id/name/placeholder to anchor on (confirmed via
+    Claude in Chrome reading the live DOM, 2026-08-27). Scopes to the
+    label's ant-row and fills that row's one input.ant-input."""
+    row = page.locator(f':text("{label_text}")').locator(
+        "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' ant-row ')][1]"
+    )
+    try:
+        row.locator("input.ant-input").fill(value, timeout=_TIMEOUT_MS)
+    except PlaywrightTimeoutError:
+        _fail(page, f'לא נמצא שדה טקסט ליד "{label_text}"')
 
 
 def _pick_unique_search_result(page, what, query):
@@ -251,10 +267,11 @@ def enter_invoice(invoice: dict) -> dict:
             _open_picker_near_label(page, "קוד ספק")
             _pick_unique_search_result(page, "ספק", invoice["supplier_name"])
 
-            try:
-                page.get_by_label("מספר תעודת ספק").fill(str(invoice["invoice_number"]), timeout=_TIMEOUT_MS)
-            except PlaywrightTimeoutError:
-                _fail(page, "לא נמצא שדה \"מספר תעודת ספק\"")
+            # Digits only -- suppliers' subject lines often prefix the number
+            # with letters (e.g. "SI266028527"), which Kateryna confirmed
+            # must be stripped before entry (2026-08-27).
+            supplier_doc_number = re.sub(r"\D", "", str(invoice.get("invoice_number") or ""))
+            _fill_field_in_row(page, "מספר תעודת ספק", supplier_doc_number)
 
             try:
                 page.get_by_role("tab", name="פרטים").click(timeout=_TIMEOUT_MS)
