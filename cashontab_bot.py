@@ -177,21 +177,28 @@ def _find_empty_item_row(page):
     """Scans the items grid's <tr> rows from the end for the real, still-
     unused data row -- see the row-targeting note in _fill_line_item's
     docstring for why a fixed offset from the end isn't reliable once a
-    prior item has been saved."""
-    rows = page.locator("table tbody tr")
-    for i in range(rows.count() - 1, -1, -1):
-        tr = rows.nth(i)
-        cells = tr.locator("td")
-        if cells.count() < 10:
-            continue  # too few cells -- this is the הערה לפריט note row
-        code_input = cells.nth(1).locator("input")
-        if code_input.count() == 0:
-            continue
-        try:
-            if code_input.first.input_value(timeout=1000) == "":
-                return tr
-        except PlaywrightTimeoutError:
-            continue
+    prior item has been saved. Retries for a few seconds: right after
+    clicking שמור for the previous item, Cash On Tab needs a moment to
+    render the next empty row -- live run 2026-08-27 hit "no empty row
+    found" on the item right after a successful שמור, before the new row
+    had appeared yet."""
+    for attempt in range(10):
+        rows = page.locator("table tbody tr")
+        for i in range(rows.count() - 1, -1, -1):
+            tr = rows.nth(i)
+            cells = tr.locator("td")
+            if cells.count() < 10:
+                continue  # too few cells -- this is the הערה לפריט note row
+            code_input = cells.nth(1).locator("input")
+            if code_input.count() == 0:
+                continue
+            try:
+                if code_input.first.input_value(timeout=1000) == "":
+                    return tr
+            except PlaywrightTimeoutError:
+                continue
+        if attempt < 9:
+            page.wait_for_timeout(500)
     _fail(page, "לא נמצאה שורת פריט ריקה להזנת הפריט הבא")
 
 
