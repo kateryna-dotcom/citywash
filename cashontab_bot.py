@@ -174,19 +174,25 @@ def _pick_unique_search_result(page, what, query):
 
 
 def _fill_line_item(page, item):
-    """LEAST VERIFIED PART OF THIS FILE. Items grid (tab פריטים): a single
-    empty row (#0) already exists as soon as the tab opens -- there is no
-    "+"/add-row button (confirmed by Kateryna 2026-08-27, screenshot showed
-    row #0 present from the start). Type the item code directly into that
-    row's קוד פריט input and press Enter -- not a search-picker dialog like
-    מחסן/ספק (confirmed by Kateryna) -- which auto-fills תיאור and a default
-    price, and is assumed (unconfirmed) to open a new empty row below for
-    the next item. Then set כמות. Columns seen in the screenshot, left to
-    right: קוד פריט, תיאור, סוג אריזה, אריזות, כמות, מחיר במט"ח, מחיר לפני
-    מע"מ, מחיר כולל מע"מ, % הנחה, סה"כ ללא מע"מ -- unit_price overwrites the
-    auto-filled default in מחיר לפני מע"מ (price before VAT), but that
-    column match is still unconfirmed against the live DOM."""
-    row = page.locator("table tbody tr").last
+    """LEAST VERIFIED PART OF THIS FILE. Items grid (tab פריטים): every item
+    is actually a *pair* of <tr> rows -- the data row (קוד פריט, תיאור,
+    כמות, prices, ...) immediately followed by a second, full-width הערה
+    לפריט (item note) row. Two live runs confirmed this the hard way: using
+    the last <tr> as the data row silently filled the item code into הערה
+    לפריט instead of קוד פריט (fill() doesn't error just because it hit the
+    "wrong" input). So the data row is the *second-to-last* <tr>, not the
+    last. A single empty pair (#0) already exists as soon as the tab opens
+    -- there is no "+"/add-row button (confirmed by Kateryna 2026-08-27).
+    Type the item code directly into the data row's קוד פריט input and
+    press Enter -- not a search-picker dialog like מחסן/ספק (confirmed by
+    Kateryna) -- which auto-fills תיאור and a default price, and is assumed
+    (unconfirmed) to open a new empty row-pair below for the next item.
+    Then set כמות and overwrite the default מחיר לפני מע"מ (price before
+    VAT) with the invoice's real unit_price, and click the row's own שמור
+    button to confirm it -- distinct from the document-level צור מסמך at
+    the very end of enter_invoice (confirmed by Kateryna: שמור sits next to
+    per-row grid/delete icons, screenshot 2026-08-27)."""
+    row = page.locator("table tbody tr").nth(-2)
     try:
         code_input = row.locator("input").first
         code_input.fill(item["code"], timeout=_TIMEOUT_MS)
@@ -204,6 +210,11 @@ def _fill_line_item(page, item):
         row.get_by_label("מחיר לפני מע\"מ").fill(str(item["unit_price"]), timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
         _fail(page, f'לא הצלחתי לעדכן "מחיר לפני מע"מ" לפריט {item.get("code")} -- ייתכן שהעמודה שונה ממה שתוכנת')
+
+    try:
+        row.get_by_role("button", name="שמור").click(timeout=_TIMEOUT_MS)
+    except PlaywrightTimeoutError:
+        _fail(page, f'לא נמצא כפתור "שמור" לשורת הפריט {item.get("code")}')
 
 
 def enter_invoice(invoice: dict) -> dict:
@@ -283,14 +294,17 @@ def enter_invoice(invoice: dict) -> dict:
             for item in invoice["items"]:
                 _fill_line_item(page, item)
 
-            # Final save is "שמור", not another "צור מסמך" -- confirmed by
-            # Kateryna 2026-08-27 (distinct from the initial button with
-            # that name that just opens the empty form, above).
+            # Final document save, at the bottom of the whole form (ביטול /
+            # הדפס טיוטה / צור מסמך / צור והצג מסמך / צור תבנית -- screenshot
+            # 2026-08-27) -- same button text as the initial one that opened
+            # the empty form, not שמור (that's the *per-row* item confirm,
+            # see _fill_line_item). exact=True so it doesn't also match
+            # "צור והצג מסמך".
             try:
-                page.get_by_role("button", name="שמור").click(timeout=_TIMEOUT_MS)
+                page.get_by_role("button", name="צור מסמך", exact=True).click(timeout=_TIMEOUT_MS)
                 page.wait_for_load_state("networkidle", timeout=_TIMEOUT_MS)
             except PlaywrightTimeoutError:
-                _fail(page, "לחיצה על \"שמור\" לא הושלמה כצפוי")
+                _fail(page, "לחיצה על \"צור מסמך\" הסופית לא הושלמה כצפוי")
         except PlaywrightTimeoutError as e:
             # Safety net for any step above that isn't individually wrapped --
             # always attach a screenshot rather than let a raw timeout escape
