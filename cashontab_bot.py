@@ -65,11 +65,26 @@ def _get_credentials():
 
 
 def _fail(page, message):
-    """Raises CashOnTabError with a screenshot of the current page attached."""
+    """Raises CashOnTabError with a screenshot of the current page attached.
+    Every real run so far has come back with NO screenshot at all (silently
+    swallowed) -- so this now (a) falls back to a viewport-only screenshot if
+    the full-page one fails (full_page can struggle inside an open ant-modal
+    with its own scroll/overlay), and (b) if even that fails, appends the
+    actual exception text to the error message instead of just losing the
+    screenshot silently, so the failure itself becomes visible in the UI."""
+    screenshot_b64 = None
+    screenshot_error = None
     try:
-        screenshot_b64 = base64.b64encode(page.screenshot(full_page=True)).decode("ascii")
-    except Exception:  # noqa: BLE001
-        screenshot_b64 = None
+        screenshot_b64 = base64.b64encode(page.screenshot(full_page=True, timeout=10000)).decode("ascii")
+    except Exception as e:  # noqa: BLE001
+        screenshot_error = f"full_page: {e}"
+        try:
+            screenshot_b64 = base64.b64encode(page.screenshot(timeout=10000)).decode("ascii")
+            screenshot_error = None
+        except Exception as e2:  # noqa: BLE001
+            screenshot_error = f"{screenshot_error} | viewport: {e2}"
+    if screenshot_error:
+        message = f"{message} [גם צילום המסך נכשל: {screenshot_error}]"
     raise CashOnTabError(message, screenshot_b64=screenshot_b64)
 
 
