@@ -212,23 +212,26 @@ def _fill_line_item(page, item):
 
     # כמות/מחיר לפני מע"מ have no real <label> (same issue as מספר תעודת
     # ספק earlier) -- get_by_label timed out against them live 2026-08-27.
-    # Target by column position instead, matched against the header row.
-    headers = [h.strip() for h in page.locator("table thead th").all_inner_texts()]
-
-    def _cell_input(column_label):
-        try:
-            col_index = headers.index(column_label)
-        except ValueError:
-            _fail(page, f'לא נמצאה עמודה "{column_label}" בטבלת הפריטים (עמודות שנמצאו: {headers})')
-        return row.locator("td").nth(col_index).locator("input")
+    # A dynamic header-text lookup (page.locator("table thead th")) also
+    # misfired on the second item -- Ant Design tables commonly render a
+    # separate fixed-column <table><thead> alongside the main one, so a
+    # page-wide "table thead th" query returns more/duplicated headers than
+    # the row actually has <td> cells for, silently shifting every index.
+    # Kateryna confirmed the real, page-independent mapping via a live DOM
+    # dump (2026-08-27): the row's 12 <td> cells line up 1:1, in order, with
+    # #, קוד פריט, תיאור, סוג אריזה, אריזות, כמות, מחיר במט"ח, מחיר לפני
+    # מע"מ, מחיר כולל מע"מ, % הנחה, סה"כ ללא מע"מ, then the שמור action cell
+    # -- so hardcode those indices instead of re-deriving them per run.
+    _QUANTITY_COL = 5
+    _PRICE_BEFORE_VAT_COL = 7
 
     try:
-        _cell_input("כמות").fill(str(item["quantity"]), timeout=_TIMEOUT_MS)
+        row.locator("td").nth(_QUANTITY_COL).locator("input").fill(str(item["quantity"]), timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
         _fail(page, f'לא הצלחתי למלא כמות לפריט {item.get("code")} -- ייתכן שהעמודה שונה ממה שתוכנת')
 
     try:
-        _cell_input('מחיר לפני מע"מ').fill(str(item["unit_price"]), timeout=_TIMEOUT_MS)
+        row.locator("td").nth(_PRICE_BEFORE_VAT_COL).locator("input").fill(str(item["unit_price"]), timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
         _fail(page, f'לא הצלחתי לעדכן "מחיר לפני מע"מ" לפריט {item.get("code")} -- ייתכן שהעמודה שונה ממה שתוכנת')
 
