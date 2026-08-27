@@ -199,15 +199,36 @@ def _fill_line_item(page, item):
         code_input.press("Enter")
     except PlaywrightTimeoutError:
         _fail(page, f'לא נמצא שדה "קוד פריט" בשורה החדשה (פריט {item.get("code")})')
-    page.wait_for_timeout(600)
+    # Enter alone was seen to not always trigger the lookup (תיאור/price
+    # stayed empty) -- Kateryna confirmed the same search icon inside that
+    # cell does the same thing, so click it too as a belt-and-suspenders
+    # second trigger. Best-effort: if the icon isn't there, Enter above may
+    # still have worked, so don't fail the whole run over this alone.
+    try:
+        row.locator(".anticon-search").first.click(timeout=2000)
+    except PlaywrightTimeoutError:
+        pass
+    page.wait_for_timeout(1000)
+
+    # כמות/מחיר לפני מע"מ have no real <label> (same issue as מספר תעודת
+    # ספק earlier) -- get_by_label timed out against them live 2026-08-27.
+    # Target by column position instead, matched against the header row.
+    headers = [h.strip() for h in page.locator("table thead th").all_inner_texts()]
+
+    def _cell_input(column_label):
+        try:
+            col_index = headers.index(column_label)
+        except ValueError:
+            _fail(page, f'לא נמצאה עמודה "{column_label}" בטבלת הפריטים (עמודות שנמצאו: {headers})')
+        return row.locator("td").nth(col_index).locator("input")
 
     try:
-        row.get_by_label("כמות").fill(str(item["quantity"]), timeout=_TIMEOUT_MS)
+        _cell_input("כמות").fill(str(item["quantity"]), timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
         _fail(page, f'לא הצלחתי למלא כמות לפריט {item.get("code")} -- ייתכן שהעמודה שונה ממה שתוכנת')
 
     try:
-        row.get_by_label("מחיר לפני מע\"מ").fill(str(item["unit_price"]), timeout=_TIMEOUT_MS)
+        _cell_input('מחיר לפני מע"מ').fill(str(item["unit_price"]), timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
         _fail(page, f'לא הצלחתי לעדכן "מחיר לפני מע"מ" לפריט {item.get("code")} -- ייתכן שהעמודה שונה ממה שתוכנת')
 
