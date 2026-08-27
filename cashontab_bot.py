@@ -174,34 +174,36 @@ def _pick_unique_search_result(page, what, query):
 
 
 def _fill_line_item(page, item):
-    """LEAST VERIFIED PART OF THIS FILE. The items grid (tab פריטים) columns
-    seen in the screenshot, left to right as displayed: קוד פריט, תיאור,
-    סוג אריזה, אריזות, כמות, מחיר במט"ח, מחיר לפני מע"מ, מחיר כולל מע"מ,
-    % הנחה, סה"כ ללא מע"מ. `code` searches/selects the item (auto-fills
-    תיאור and a default price); `unit_price` from our invoice data then
-    overwrites the default in מחיר לפני מע"מ specifically (price *before*
-    VAT, matching how unit_price is parsed from supplier invoices) --
-    confirm this is the right column if a run comes out with an unexpected
-    total. DOM structure of the grid rows (whether cells are addressable by
-    column index reliably) is unconfirmed."""
+    """LEAST VERIFIED PART OF THIS FILE. Items grid (tab פריטים): a single
+    empty row (#0) already exists as soon as the tab opens -- there is no
+    "+"/add-row button (confirmed by Kateryna 2026-08-27, screenshot showed
+    row #0 present from the start). Type the item code directly into that
+    row's קוד פריט input and press Enter -- not a search-picker dialog like
+    מחסן/ספק (confirmed by Kateryna) -- which auto-fills תיאור and a default
+    price, and is assumed (unconfirmed) to open a new empty row below for
+    the next item. Then set כמות. Columns seen in the screenshot, left to
+    right: קוד פריט, תיאור, סוג אריזה, אריזות, כמות, מחיר במט"ח, מחיר לפני
+    מע"מ, מחיר כולל מע"מ, % הנחה, סה"כ ללא מע"מ -- unit_price overwrites the
+    auto-filled default in מחיר לפני מע"מ (price before VAT), but that
+    column match is still unconfirmed against the live DOM."""
+    row = page.locator("table tbody tr").last
     try:
-        page.get_by_role("button", name="+").click(timeout=_TIMEOUT_MS)
-    except PlaywrightTimeoutError:
-        _fail(page, "לא נמצא כפתור '+' להוספת שורת פריט")
-
-    row = page.locator("table tr").last
-    try:
-        row.get_by_placeholder("קוד פריט").fill(item["code"], timeout=_TIMEOUT_MS)
+        code_input = row.locator("input").first
+        code_input.fill(item["code"], timeout=_TIMEOUT_MS)
+        code_input.press("Enter")
     except PlaywrightTimeoutError:
         _fail(page, f'לא נמצא שדה "קוד פריט" בשורה החדשה (פריט {item.get("code")})')
     page.wait_for_timeout(600)
-    _pick_unique_search_result(page, "פריט", item["code"])
 
     try:
         row.get_by_label("כמות").fill(str(item["quantity"]), timeout=_TIMEOUT_MS)
+    except PlaywrightTimeoutError:
+        _fail(page, f'לא הצלחתי למלא כמות לפריט {item.get("code")} -- ייתכן שהעמודה שונה ממה שתוכנת')
+
+    try:
         row.get_by_label("מחיר לפני מע\"מ").fill(str(item["unit_price"]), timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
-        _fail(page, f'לא הצלחתי למלא כמות/מחיר לפריט {item.get("code")} -- ייתכן שהעמודות שונות ממה שתוכנת')
+        _fail(page, f'לא הצלחתי לעדכן "מחיר לפני מע"מ" לפריט {item.get("code")} -- ייתכן שהעמודה שונה ממה שתוכנת')
 
 
 def enter_invoice(invoice: dict) -> dict:
@@ -281,11 +283,14 @@ def enter_invoice(invoice: dict) -> dict:
             for item in invoice["items"]:
                 _fill_line_item(page, item)
 
+            # Final save is "שמור", not another "צור מסמך" -- confirmed by
+            # Kateryna 2026-08-27 (distinct from the initial button with
+            # that name that just opens the empty form, above).
             try:
-                page.get_by_role("button", name="צור מסמך").click(timeout=_TIMEOUT_MS)
+                page.get_by_role("button", name="שמור").click(timeout=_TIMEOUT_MS)
                 page.wait_for_load_state("networkidle", timeout=_TIMEOUT_MS)
             except PlaywrightTimeoutError:
-                _fail(page, "לחיצה על \"צור מסמך\" לא הושלמה כצפוי")
+                _fail(page, "לחיצה על \"שמור\" לא הושלמה כצפוי")
         except PlaywrightTimeoutError as e:
             # Safety net for any step above that isn't individually wrapped --
             # always attach a screenshot rather than let a raw timeout escape
