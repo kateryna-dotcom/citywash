@@ -682,7 +682,7 @@ def _ready_for_entry_shape(r: dict) -> dict | None:
         "id": r["id"],
         "branch": r["branch"],
         "supplier_domain": r.get("supplier_domain"),
-        "supplier_name": suppliers.SUPPLIER_CASHONTAB_NAMES.get(r.get("supplier_domain")),
+        "supplier_name": suppliers.cashontab_search_value(r.get("supplier_domain")),
         "invoice_number": r.get("invoice_number"),
         "received_at": r.get("received_at"),
         "items": entries,
