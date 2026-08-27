@@ -173,15 +173,21 @@ def _pick_unique_search_result(page, what, query):
         _fail(page, f'נמצאה שורה מתאימה ל-"{query}" ({what}) אך לא נלחץ עליה כראוי')
 
 
-def _find_empty_item_row(page):
-    """Scans the items grid's <tr> rows from the end for the real, still-
-    unused data row -- see the row-targeting note in _fill_line_item's
-    docstring for why a fixed offset from the end isn't reliable once a
-    prior item has been saved. Retries for a few seconds: right after
-    clicking שמור for the previous item, Cash On Tab needs a moment to
-    render the next empty row -- live run 2026-08-27 hit "no empty row
-    found" on the item right after a successful שמור, before the new row
-    had appeared yet."""
+def _find_item_row(page):
+    """Returns the items grid's last real data row (>=10 <td>, ruling out
+    the 1-wide-cell הערה לפריט note row) -- see the row-targeting note in
+    _fill_line_item's docstring for why a fixed offset from the end isn't
+    reliable once a prior item has been saved.
+
+    Used to require this row's קוד פריט to be empty (i.e. definitely
+    unused) before returning it, retrying while Cash On Tab rendered the
+    next row after a שמור click. That stopped working reliably on later
+    items (live run 2026-08-27, "no empty row found" even after retrying)
+    -- Cash On Tab doesn't reliably keep appending fresh empty rows past a
+    handful of items. So this no longer waits for emptiness: it just
+    returns the last data row, whatever is currently in it, and
+    _fill_line_item is responsible for clearing קוד פריט before typing the
+    new code into it (Kateryna's fix, 2026-08-27)."""
     for attempt in range(10):
         rows = page.locator("table tbody tr")
         for i in range(rows.count() - 1, -1, -1):
@@ -189,17 +195,11 @@ def _find_empty_item_row(page):
             cells = tr.locator("td")
             if cells.count() < 10:
                 continue  # too few cells -- this is the הערה לפריט note row
-            code_input = cells.nth(1).locator("input")
-            if code_input.count() == 0:
-                continue
-            try:
-                if code_input.first.input_value(timeout=1000) == "":
-                    return tr
-            except PlaywrightTimeoutError:
-                continue
+            if cells.nth(1).locator("input").count() > 0:
+                return tr
         if attempt < 9:
             page.wait_for_timeout(500)
-    _fail(page, "לא נמצאה שורת פריט ריקה להזנת הפריט הבא")
+    _fail(page, "לא נמצאה שורת פריט להזנת הפריט הבא")
 
 
 def _fill_line_item(page, item):
@@ -227,14 +227,17 @@ def _fill_line_item(page, item):
     *second* item -- Kateryna confirmed live 2026-08-27 that קוד פריט still
     showed the *previous* item's code, meaning we were re-editing item 1's
     now-saved row instead of a fresh one (its שמור button was then also
-    gone, matching the exact next error we'd been seeing). Once a row is
-    saved, the row layout after it isn't a reliable fixed offset -- so
-    instead scan from the end for a real data row (>=10 <td>, ruling out
-    the 1-wide-cell הערה לפריט note row) whose קוד פריט cell (index 1) is
-    still empty, i.e. actually unused."""
-    row = _find_empty_item_row(page)
+    gone, matching the exact next error we'd been seeing). Requiring that
+    row's קוד פריט to be empty (see _find_item_row) fixed that, but broke
+    again on later items once Cash On Tab stopped appending fresh empty
+    rows -- so _find_item_row now just returns the last data row
+    regardless of its content, and this function explicitly clears קוד
+    פריט before typing into it (Kateryna's fix, 2026-08-27), instead of
+    relying on the row already being empty."""
+    row = _find_item_row(page)
     try:
         code_input = row.locator("input").first
+        code_input.fill("", timeout=_TIMEOUT_MS)
         code_input.fill(item["code"], timeout=_TIMEOUT_MS)
         code_input.press("Enter")
     except PlaywrightTimeoutError:
