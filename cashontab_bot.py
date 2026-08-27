@@ -39,6 +39,10 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 BASE_URL = "https://cashontab.co.il"
 _TIMEOUT_MS = 15000
 
+# Fixed עובד (employee) code every automated document gets filed under --
+# not derived from invoice data (confirmed by Kateryna 2026-08-27).
+_DEFAULT_EMPLOYEE_CODE = "999"
+
 
 class CashOnTabError(Exception):
     """Raised whenever the bot can't confidently proceed: missing
@@ -234,6 +238,12 @@ def enter_invoice(invoice: dict) -> dict:
                 page.get_by_role("button", name="צור מסמך", exact=True).click(timeout=_TIMEOUT_MS)
             except PlaywrightTimeoutError:
                 _fail(page, 'בחרתי "ת.מ. רכש" אבל לא נמצא כפתור "צור מסמך" הראשוני (לפתיחת הטופס)')
+
+            # עובד (employee) always gets the same fixed code -- not part of
+            # the invoice data, confirmed by Kateryna 2026-08-27. Same
+            # search-picker pattern as מחסן/קוד ספק below (same "..." button).
+            _open_picker_near_label(page, "קוד עובד")
+            _pick_unique_search_result(page, "עובד", _DEFAULT_EMPLOYEE_CODE)
 
             _open_picker_near_label(page, "קוד מחסן")
             _pick_unique_search_result(page, "מחסן", invoice["branch"])
