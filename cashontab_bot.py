@@ -412,26 +412,21 @@ def enter_invoice(invoice: dict) -> dict:
 
                 # Final document save, at the bottom of the whole form
                 # (ביטול / הדפס טיוטה / צור מסמך / צור והצג מסמך / צור
-                # תבנית -- screenshot 2026-08-27) -- same button text as
-                # the initial one that opened the empty form, not שמור
-                # (that's the *per-row* item confirm, see _fill_line_item).
-                # exact=True so it doesn't also match "צור והצג מסמך". By
-                # this point in the flow there are TWO "צור מסמך" buttons
-                # on the page -- live run 2026-08-27 hit a Playwright
-                # strict-mode error: a page-wide global/toolbar one, and
-                # the real in-form one, which Playwright located via the
-                # document panel's own accessible label (matching the
-                # header text "מסמך: ת.מ. רכש קופה: ... קוד קופה: ...").
-                # Scope to that panel by its stable "מסמך: ת.מ. רכש" prefix
-                # (קופה name/code vary) instead of searching the whole
-                # page.
+                # תבנית -- screenshot 2026-08-27). Kateryna confirmed
+                # 2026-08-27 that "צור מסמך" alone is NOT the right final
+                # action -- "צור והצג מסמך" (create *and show* the
+                # document) is what actually finalizes/saves it properly.
+                # Scoped to the document panel by its stable "מסמך: ת.מ.
+                # רכש" prefix (קופה name/code vary), same reasoning as
+                # before: a page-wide search risks matching more than one
+                # button with overlapping text.
                 try:
                     page.get_by_label(re.compile("^מסמך: ת\\.מ\\. רכש")) \
-                        .get_by_role("button", name="צור מסמך", exact=True) \
+                        .get_by_role("button", name="צור והצג מסמך", exact=True) \
                         .click(timeout=_TIMEOUT_MS)
                     page.wait_for_load_state("networkidle", timeout=_TIMEOUT_MS)
                 except PlaywrightTimeoutError:
-                    _fail(page, "לחיצה על \"צור מסמך\" הסופית לא הושלמה כצפוי")
+                    _fail(page, "לחיצה על \"צור והצג מסמך\" הסופית לא הושלמה כצפוי")
             except CashOnTabError:
                 _cancel_partial_document(page)
                 raise
