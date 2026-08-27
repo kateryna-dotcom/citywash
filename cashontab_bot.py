@@ -427,6 +427,24 @@ def enter_invoice(invoice: dict) -> dict:
                     page.wait_for_load_state("networkidle", timeout=_TIMEOUT_MS)
                 except PlaywrightTimeoutError:
                     _fail(page, "לחיצה על \"צור והצג מסמך\" הסופית לא הושלמה כצפוי")
+
+                # Verify the save actually happened instead of trusting a
+                # clean click -- live run 2026-08-27: the click and the
+                # wait both completed with no error, invoice_store got
+                # marked "ok", but nothing was ever created in Cash On Tab
+                # at all. A click not timing out only means the button was
+                # reachable, not that Cash On Tab persisted anything. As
+                # long as ביטול is still there, we're still in the
+                # unsaved create/edit form -- if it's gone within a few
+                # seconds of the click, the document panel closed and
+                # entered_invoice can trust the save (matches how every
+                # confirmed-successful save so far looked in screenshots:
+                # the form/its ביטול button disappear once truly saved).
+                try:
+                    page.get_by_role("button", name="ביטול").wait_for(state="hidden", timeout=10000)
+                except PlaywrightTimeoutError:
+                    _fail(page, 'לחצתי "צור והצג מסמך" בלי שגיאה, אבל הטופס (כפתור "ביטול") עדיין פתוח -- ' +
+                          "נראה שהמסמך לא נשמר בפועל למרות שהלחיצה עצמה הצליחה")
             except CashOnTabError:
                 _cancel_partial_document(page)
                 raise
