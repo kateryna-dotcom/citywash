@@ -182,7 +182,12 @@ def enter_invoice(invoice: dict) -> dict:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
-        page = browser.new_page()
+        # Default viewport (1280x720) is narrower than Kateryna's own browser
+        # window -- Cash On Tab's Ant Design forms are responsive and may
+        # collapse/hide fields at narrower widths, which would explain a
+        # selector that's confirmed correct via DevTools/live DOM checks on
+        # her screen still not matching anything in the bot's own run.
+        page = browser.new_page(viewport={"width": 1920, "height": 1080})
         try:
             _login(page, company, username, password)
 
