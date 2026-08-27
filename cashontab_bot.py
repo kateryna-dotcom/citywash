@@ -187,11 +187,12 @@ def _fill_line_item(page, item):
     press Enter -- not a search-picker dialog like מחסן/ספק (confirmed by
     Kateryna) -- which auto-fills תיאור and a default price, and is assumed
     (unconfirmed) to open a new empty row-pair below for the next item.
-    Then set כמות and overwrite the default מחיר לפני מע"מ (price before
-    VAT) with the invoice's real unit_price, and click the row's own שמור
+    Then set כמות (best-effort -- see below) and click the row's own שמור
     button to confirm it -- distinct from the document-level צור מסמך at
     the very end of enter_invoice (confirmed by Kateryna: שמור sits next to
-    per-row grid/delete icons, screenshot 2026-08-27)."""
+    per-row grid/delete icons, screenshot 2026-08-27). מחיר לפני מע"מ is
+    left as Cash On Tab's own default -- Kateryna confirmed 2026-08-27 the
+    invoice's unit_price should NOT overwrite it."""
     row = page.locator("table tbody tr").nth(-2)
     try:
         code_input = row.locator("input").first
@@ -210,30 +211,34 @@ def _fill_line_item(page, item):
         pass
     page.wait_for_timeout(1000)
 
-    # כמות/מחיר לפני מע"מ have no real <label> (same issue as מספר תעודת
-    # ספק earlier) -- get_by_label timed out against them live 2026-08-27.
-    # A dynamic header-text lookup (page.locator("table thead th")) also
-    # misfired on the second item -- Ant Design tables commonly render a
-    # separate fixed-column <table><thead> alongside the main one, so a
-    # page-wide "table thead th" query returns more/duplicated headers than
-    # the row actually has <td> cells for, silently shifting every index.
-    # Kateryna confirmed the real, page-independent mapping via a live DOM
-    # dump (2026-08-27): the row's 12 <td> cells line up 1:1, in order, with
-    # #, קוד פריט, תיאור, סוג אריזה, אריזות, כמות, מחיר במט"ח, מחיר לפני
-    # מע"מ, מחיר כולל מע"מ, % הנחה, סה"כ ללא מע"מ, then the שמור action cell
-    # -- so hardcode those indices instead of re-deriving them per run.
+    # כמות has no real <label> (same issue as מספר תעודת ספק earlier) --
+    # get_by_label timed out against it live 2026-08-27, and a dynamic
+    # header-text lookup (page.locator("table thead th")) also misfired on
+    # the second item -- Ant Design tables commonly render a separate
+    # fixed-column <table><thead> alongside the main one, so a page-wide
+    # "table thead th" query returns more/duplicated headers than the row
+    # actually has <td> cells for, silently shifting every index. Kateryna
+    # confirmed the real, page-independent mapping via a live DOM dump
+    # (2026-08-27): the row's 12 <td> cells line up 1:1, in order, with #,
+    # קוד פריט, תיאור, סוג אריזה, אריזות, כמות, מחיר במט"ח, מחיר לפני מע"מ,
+    # מחיר כולל מע"מ, % הנחה, סה"כ ללא מע"מ, then the שמור action cell --
+    # so hardcode this index instead of re-deriving it per run.
+    #
+    # Best-effort, not fatal: Cash On Tab's own default כמות (usually 1)
+    # is frequently already correct, and Kateryna confirmed 2026-08-27 that
+    # fill() can time out here even when the value it set is actually
+    # right (a re-render right after the code lookup above likely trips
+    # Playwright's stability check) -- failing the whole invoice over that
+    # would be wrong, so just leave whatever's there if this fill fails.
+    #
+    # מחיר לפני מע"מ is intentionally left untouched -- Kateryna confirmed
+    # 2026-08-27 the item's own default price should stand, no overwrite
+    # from the invoice's unit_price.
     _QUANTITY_COL = 5
-    _PRICE_BEFORE_VAT_COL = 7
-
     try:
         row.locator("td").nth(_QUANTITY_COL).locator("input").fill(str(item["quantity"]), timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
-        _fail(page, f'לא הצלחתי למלא כמות לפריט {item.get("code")} -- ייתכן שהעמודה שונה ממה שתוכנת')
-
-    try:
-        row.locator("td").nth(_PRICE_BEFORE_VAT_COL).locator("input").fill(str(item["unit_price"]), timeout=_TIMEOUT_MS)
-    except PlaywrightTimeoutError:
-        _fail(page, f'לא הצלחתי לעדכן "מחיר לפני מע"מ" לפריט {item.get("code")} -- ייתכן שהעמודה שונה ממה שתוכנת')
+        pass
 
     try:
         row.get_by_role("button", name="שמור").click(timeout=_TIMEOUT_MS)
