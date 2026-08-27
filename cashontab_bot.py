@@ -78,9 +78,18 @@ def _cancel_partial_document(page):
     behind by every failed run from earlier in this debugging session,
     since nothing ever cleaned them up. Called from the except block in
     enter_invoice on any failure after that point, to click "ביטול" and
-    discard the partial document instead of leaving another one dangling."""
+    discard the partial document instead of leaving another one dangling.
+
+    Scoped to the document panel (same "מסמך: ת.מ. רכש" label prefix as
+    the final-save click) -- live run 2026-08-27 showed there are TWO
+    "ביטול" buttons on the page by this point, same page-wide-vs-in-panel
+    pattern as every other button here. A page-wide search would hit the
+    same strict-mode ambiguity and, since this is best-effort, silently
+    fail to actually cancel anything."""
     try:
-        page.get_by_role("button", name="ביטול").click(timeout=5000)
+        page.get_by_label(re.compile("^מסמך: ת\\.מ\\. רכש")) \
+            .get_by_role("button", name="ביטול") \
+            .click(timeout=5000)
     except Exception:  # noqa: BLE001
         pass
 
@@ -440,8 +449,19 @@ def enter_invoice(invoice: dict) -> dict:
                 # entered_invoice can trust the save (matches how every
                 # confirmed-successful save so far looked in screenshots:
                 # the form/its ביטול button disappear once truly saved).
+                #
+                # Scoped to the document panel, not the whole page -- live
+                # run 2026-08-27 hit a strict-mode error here too: there
+                # are TWO "ביטול" buttons on the page at this point, same
+                # page-wide-vs-in-panel pattern as every other button in
+                # this flow. If the save genuinely succeeded the panel
+                # (and its label) is gone entirely, so this scoped locator
+                # naturally has zero matches and wait_for(hidden) resolves
+                # immediately -- exactly the signal we want.
                 try:
-                    page.get_by_role("button", name="ביטול").wait_for(state="hidden", timeout=10000)
+                    page.get_by_label(re.compile("^מסמך: ת\\.מ\\. רכש")) \
+                        .get_by_role("button", name="ביטול") \
+                        .wait_for(state="hidden", timeout=10000)
                 except PlaywrightTimeoutError:
                     _fail(page, 'לחצתי "צור והצג מסמך" בלי שגיאה, אבל הטופס (כפתור "ביטול") עדיין פתוח -- ' +
                           "נראה שהמסמך לא נשמר בפועל למרות שהלחיצה עצמה הצליחה")
