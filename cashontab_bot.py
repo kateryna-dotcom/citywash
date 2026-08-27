@@ -223,6 +223,18 @@ def enter_invoice(invoice: dict) -> dict:
             except PlaywrightTimeoutError:
                 _fail(page, 'נכנסתי ל"מסמכים" אבל לא נמצא כפתור "ת.מ. רכש"')
 
+            # Selecting the document type alone doesn't open the editable
+            # form -- "צור מסמך" has to be pressed once here too, before the
+            # מחסן/קוד ספק fields exist at all (confirmed by Kateryna
+            # 2026-08-27: every earlier failure to find "קוד מחסן" was
+            # because this step was missing, not a wrong selector). The same
+            # button text is pressed again at the very end to actually save
+            # the filled-in document -- two different clicks, same label.
+            try:
+                page.get_by_role("button", name="צור מסמך", exact=True).click(timeout=_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                _fail(page, 'בחרתי "ת.מ. רכש" אבל לא נמצא כפתור "צור מסמך" הראשוני (לפתיחת הטופס)')
+
             _open_picker_near_label(page, "קוד מחסן")
             _pick_unique_search_result(page, "מחסן", invoice["branch"])
 
