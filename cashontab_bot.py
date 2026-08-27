@@ -174,7 +174,7 @@ def _pick_unique_search_result(page, what, query):
 
 
 def _fill_line_item(page, item):
-    """LEAST VERIFIED PART OF THIS FILE. The items grid (tab פרטים) columns
+    """LEAST VERIFIED PART OF THIS FILE. The items grid (tab פריטים) columns
     seen in the screenshot, left to right as displayed: קוד פריט, תיאור,
     סוג אריזה, אריזות, כמות, מחיר במט"ח, מחיר לפני מע"מ, מחיר כולל מע"מ,
     % הנחה, סה"כ ללא מע"מ. `code` searches/selects the item (auto-fills
@@ -274,9 +274,9 @@ def enter_invoice(invoice: dict) -> dict:
             _fill_field_in_row(page, "מספר תעודת ספק", supplier_doc_number)
 
             try:
-                page.get_by_role("tab", name="פרטים").click(timeout=_TIMEOUT_MS)
+                page.get_by_role("tab", name="פריטים").click(timeout=_TIMEOUT_MS)
             except PlaywrightTimeoutError:
-                _fail(page, "לא נמצאה לשונית \"פרטים\" (שורות הפריטים)")
+                _fail(page, "לא נמצאה לשונית \"פריטים\" (שורות הפריטים)")
 
             for item in invoice["items"]:
                 _fill_line_item(page, item)
