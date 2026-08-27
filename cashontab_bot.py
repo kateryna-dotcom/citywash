@@ -69,6 +69,22 @@ def _get_credentials():
     return company, username, password
 
 
+def _cancel_partial_document(page):
+    """Best-effort cleanup, never allowed to raise or mask the real error:
+    the initial "צור מסמך" click in enter_invoice already creates a real,
+    persisted document (with its own document number) before any of the
+    fields below are filled in. Kateryna found a string of empty/
+    near-empty ת.מ. רכש documents in Cash On Tab on 2026-08-27 -- one left
+    behind by every failed run from earlier in this debugging session,
+    since nothing ever cleaned them up. Called from the except block in
+    enter_invoice on any failure after that point, to click "ביטול" and
+    discard the partial document instead of leaving another one dangling."""
+    try:
+        page.get_by_role("button", name="ביטול").click(timeout=5000)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _fail(page, message):
     """Raises CashOnTabError with a screenshot of the current page attached.
     Every real run so far has come back with NO screenshot at all (silently
@@ -359,52 +375,73 @@ def enter_invoice(invoice: dict) -> dict:
             except PlaywrightTimeoutError:
                 _fail(page, 'בחרתי "ת.מ. רכש" אבל לא נמצא כפתור "צור מסמך" הראשוני (לפתיחת הטופס)')
 
-            # עובד (employee) always gets the same fixed code -- not part of
-            # the invoice data, confirmed by Kateryna 2026-08-27. Same
-            # search-picker pattern as מחסן/קוד ספק below (same "..." button).
-            _open_picker_near_label(page, "קוד עובד")
-            _pick_unique_search_result(page, "עובד", _DEFAULT_EMPLOYEE_CODE)
-
-            _open_picker_near_label(page, "קוד מחסן")
-            _pick_unique_search_result(page, "מחסן", invoice["branch"])
-
-            _open_picker_near_label(page, "קוד ספק")
-            _pick_unique_search_result(page, "ספק", invoice["supplier_name"])
-
-            # Digits only -- suppliers' subject lines often prefix the number
-            # with letters (e.g. "SI266028527"), which Kateryna confirmed
-            # must be stripped before entry (2026-08-27).
-            supplier_doc_number = re.sub(r"\D", "", str(invoice.get("invoice_number") or ""))
-            _fill_field_in_row(page, "מספר תעודת ספק", supplier_doc_number)
-
+            # This click already created a real, persisted document (with
+            # its own document number) before anything below is filled in
+            # -- confirmed 2026-08-27, when Kateryna found a string of
+            # empty/near-empty ת.מ. רכש documents in Cash On Tab, one per
+            # failed run from earlier in this same debugging session. From
+            # here on, try to clean up (click ביטול) on any failure instead
+            # of leaving another one dangling.
             try:
-                page.get_by_role("tab", name="פריטים").click(timeout=_TIMEOUT_MS)
-            except PlaywrightTimeoutError:
-                _fail(page, "לא נמצאה לשונית \"פריטים\" (שורות הפריטים)")
+                # עובד (employee) always gets the same fixed code -- not
+                # part of the invoice data, confirmed by Kateryna
+                # 2026-08-27. Same search-picker pattern as מחסן/קוד ספק
+                # below (same "..." button).
+                _open_picker_near_label(page, "קוד עובד")
+                _pick_unique_search_result(page, "עובד", _DEFAULT_EMPLOYEE_CODE)
 
-            for item in invoice["items"]:
-                _fill_line_item(page, item)
+                _open_picker_near_label(page, "קוד מחסן")
+                _pick_unique_search_result(page, "מחסן", invoice["branch"])
 
-            # Final document save, at the bottom of the whole form (ביטול /
-            # הדפס טיוטה / צור מסמך / צור והצג מסמך / צור תבנית -- screenshot
-            # 2026-08-27) -- same button text as the initial one that opened
-            # the empty form, not שמור (that's the *per-row* item confirm,
-            # see _fill_line_item). exact=True so it doesn't also match
-            # "צור והצג מסמך". By this point in the flow there are TWO
-            # "צור מסמך" buttons on the page -- live run 2026-08-27 hit a
-            # Playwright strict-mode error: a page-wide global/toolbar one,
-            # and the real in-form one, which Playwright located via the
-            # document panel's own accessible label (matching the header
-            # text "מסמך: ת.מ. רכש קופה: ... קוד קופה: ..."). Scope to that
-            # panel by its stable "מסמך: ת.מ. רכש" prefix (קופה name/code
-            # vary) instead of searching the whole page.
-            try:
-                page.get_by_label(re.compile("^מסמך: ת\\.מ\\. רכש")) \
-                    .get_by_role("button", name="צור מסמך", exact=True) \
-                    .click(timeout=_TIMEOUT_MS)
-                page.wait_for_load_state("networkidle", timeout=_TIMEOUT_MS)
-            except PlaywrightTimeoutError:
-                _fail(page, "לחיצה על \"צור מסמך\" הסופית לא הושלמה כצפוי")
+                _open_picker_near_label(page, "קוד ספק")
+                _pick_unique_search_result(page, "ספק", invoice["supplier_name"])
+
+                # Digits only -- suppliers' subject lines often prefix the
+                # number with letters (e.g. "SI266028527"), which Kateryna
+                # confirmed must be stripped before entry (2026-08-27).
+                supplier_doc_number = re.sub(r"\D", "", str(invoice.get("invoice_number") or ""))
+                _fill_field_in_row(page, "מספר תעודת ספק", supplier_doc_number)
+
+                try:
+                    page.get_by_role("tab", name="פריטים").click(timeout=_TIMEOUT_MS)
+                except PlaywrightTimeoutError:
+                    _fail(page, "לא נמצאה לשונית \"פריטים\" (שורות הפריטים)")
+
+                for item in invoice["items"]:
+                    _fill_line_item(page, item)
+
+                # Final document save, at the bottom of the whole form
+                # (ביטול / הדפס טיוטה / צור מסמך / צור והצג מסמך / צור
+                # תבנית -- screenshot 2026-08-27) -- same button text as
+                # the initial one that opened the empty form, not שמור
+                # (that's the *per-row* item confirm, see _fill_line_item).
+                # exact=True so it doesn't also match "צור והצג מסמך". By
+                # this point in the flow there are TWO "צור מסמך" buttons
+                # on the page -- live run 2026-08-27 hit a Playwright
+                # strict-mode error: a page-wide global/toolbar one, and
+                # the real in-form one, which Playwright located via the
+                # document panel's own accessible label (matching the
+                # header text "מסמך: ת.מ. רכש קופה: ... קוד קופה: ...").
+                # Scope to that panel by its stable "מסמך: ת.מ. רכש" prefix
+                # (קופה name/code vary) instead of searching the whole
+                # page.
+                try:
+                    page.get_by_label(re.compile("^מסמך: ת\\.מ\\. רכש")) \
+                        .get_by_role("button", name="צור מסמך", exact=True) \
+                        .click(timeout=_TIMEOUT_MS)
+                    page.wait_for_load_state("networkidle", timeout=_TIMEOUT_MS)
+                except PlaywrightTimeoutError:
+                    _fail(page, "לחיצה על \"צור מסמך\" הסופית לא הושלמה כצפוי")
+            except CashOnTabError:
+                _cancel_partial_document(page)
+                raise
+            except PlaywrightTimeoutError as e:
+                # Catches anything in the block above that isn't
+                # individually wrapped with its own _fail() call -- still
+                # needs cleanup since the document already exists by here,
+                # unlike the outer safety net below.
+                _cancel_partial_document(page)
+                _fail(page, f"שלב לא צפוי בתהליך: {e}")
         except PlaywrightTimeoutError as e:
             # Safety net for any step above that isn't individually wrapped --
             # always attach a screenshot rather than let a raw timeout escape
