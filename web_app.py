@@ -888,9 +888,17 @@ async def inventory_resolve_item(record_id: int, item_index: int, request: Reque
 async def inventory_match_item(record_id: int, item_index: int, request: Request):
     """Resolves a line item the automatic matcher couldn't confidently
     place: either Kateryna types/scans the Cash On Tab barcode of the
-    correct product ("matched"), or marks it as never-to-be-entered
-    ("skip"). Either way the decision is saved to item_mappings so this
-    exact supplier SKU is never asked about again on future invoices."""
+    correct product, or searches the catalogue by name and picks a result
+    ("matched"), or marks it as never-to-be-entered ("skip"). When the line
+    item has a supplier SKU, the decision is also saved to item_mappings so
+    this exact supplier SKU is never asked about again on future invoices.
+    Some suppliers' invoices (e.g. אמפייר אס / grow.security) print no
+    מק"ט at all -- the parser then has nothing to key a mapping on, so for
+    those the resolution is applied to this line item only and nothing is
+    remembered for next time; she'll search by name again on the next
+    invoice, which is still much faster than being unable to resolve it at
+    all (the previous behavior: a hard 400 blocked confirmation entirely
+    whenever sku was empty)."""
     unauthorized = _require_api_auth(request)
     if unauthorized:
         return unauthorized
@@ -913,14 +921,15 @@ async def inventory_match_item(record_id: int, item_index: int, request: Request
     supplier_domain = record.get("supplier_domain") or ""
     # Clean in case this line item was stored before the bidi-mark fix --
     # keeps the mapping key consistent with what future (already-clean)
-    # ingests will look up.
+    # ingests will look up. Empty when the supplier's invoice has no מק"ט
+    # at all -- there's then no stable key to save a reusable mapping under,
+    # but the line item itself can still be resolved below.
     sku = item_matcher.clean_key(line_item.get("sku") or line_item.get("barcode") or "")
-    if not sku:
-        return Response("This item has no SKU/barcode to key the mapping on", status_code=400)
 
     try:
         if action == "skip":
-            item_mapping_store.upsert_mapping(supplier_domain, sku, "skip")
+            if sku:
+                item_mapping_store.upsert_mapping(supplier_domain, sku, "skip")
             invoice_store.update_line_item(record_id, item_index, {
                 "match_source": "skip", "needs_confirmation": False,
                 "matched_code": None, "matched_barcode": None, "matched_name": None,
@@ -942,11 +951,12 @@ async def inventory_match_item(record_id: int, item_index: int, request: Request
                 )
             catalog_code = item["code"] if item else barcode
             catalog_name = item["name"] if item else (line_item.get("description") or barcode)
-            item_mapping_store.upsert_mapping(
-                supplier_domain, sku, "matched",
-                catalog_code=catalog_code, catalog_name=catalog_name,
-                notes=None if item else "force-saved: not in the cashontab_catalog.json snapshot at save time",
-            )
+            if sku:
+                item_mapping_store.upsert_mapping(
+                    supplier_domain, sku, "matched",
+                    catalog_code=catalog_code, catalog_name=catalog_name,
+                    notes=None if item else "force-saved: not in the cashontab_catalog.json snapshot at save time",
+                )
             invoice_store.update_line_item(record_id, item_index, {
                 "match_source": "matched", "needs_confirmation": False,
                 "matched_code": catalog_code, "matched_barcode": item.get("barcode") if item else barcode,
