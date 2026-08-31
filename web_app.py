@@ -678,6 +678,27 @@ def _ready_for_entry_shape(r: dict) -> dict | None:
         })
     if not entries:
         return None
+
+    # Merge entries that share the same Cash On Tab item code into one,
+    # summing quantity -- confirmed live 2026-08-31: typing an item code
+    # into the grid a second time (a supplier invoice listed the same
+    # קוד פריט on two separate lines) doesn't create an independent second
+    # row in Cash On Tab, it merges into the already-linked row with
+    # כמות/אריזות both blown up to 999,999 (same failure shape as the
+    # already-linked-row duplication bug fixed earlier for a different
+    # cause). Never hand cashontab_bot.py two entries with the same code.
+    merged_by_code = {}
+    merged_entries = []
+    for entry in entries:
+        code = entry.get("code")
+        existing = merged_by_code.get(code) if code else None
+        if existing is not None:
+            existing["quantity"] = (existing.get("quantity") or 0) + (entry.get("quantity") or 0)
+            continue
+        if code:
+            merged_by_code[code] = entry
+        merged_entries.append(entry)
+    entries = merged_entries
     return {
         "id": r["id"],
         "branch": r["branch"],
