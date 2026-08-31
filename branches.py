@@ -52,6 +52,26 @@ NON_INVENTORY_CATEGORIES = [
 ]
 
 
+# Cash On Tab's own מחסן search sometimes has more than one warehouse
+# registered under the exact same name -- searching the plain branch name
+# then returns multiple ambiguous matches and cashontab_bot.py correctly
+# refuses to guess. This overrides what it actually searches with, per
+# branch, when that's happened and been confirmed.
+CASHONTAB_SEARCH_OVERRIDES = {
+    # Two מחסן rows are both named "בית דגן" (codes 8 and 24) -- Kateryna
+    # confirmed 2026-08-27 this branch is always code 24. Search by code
+    # instead of the ambiguous name.
+    "בית דגן": "24",
+}
+
+
+def cashontab_search_value(branch):
+    """What cashontab_bot.py should actually type into the מחסן search box
+    for this branch -- an override (code) if the plain name is ambiguous in
+    Cash On Tab, otherwise the branch name itself."""
+    return CASHONTAB_SEARCH_OVERRIDES.get(branch) or branch
+
+
 def detect_branch(text: str) -> str | None:
     """Best-effort guess at which branch an invoice belongs to, by checking
     whether every word of a branch name shows up somewhere in the extracted
