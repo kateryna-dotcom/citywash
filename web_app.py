@@ -680,7 +680,8 @@ def _ready_for_entry_shape(r: dict) -> dict | None:
         return None
     return {
         "id": r["id"],
-        "branch": branches.cashontab_search_value(r["branch"]),
+        "branch": r["branch"],
+        "branch_code_hint": branches.cashontab_code_hint(r["branch"]),
         "supplier_domain": r.get("supplier_domain"),
         "supplier_name": suppliers.cashontab_search_value(r.get("supplier_domain")),
         "invoice_number": r.get("invoice_number"),

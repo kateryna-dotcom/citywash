@@ -55,21 +55,27 @@ NON_INVENTORY_CATEGORIES = [
 # Cash On Tab's own מחסן search sometimes has more than one warehouse
 # registered under the exact same name -- searching the plain branch name
 # then returns multiple ambiguous matches and cashontab_bot.py correctly
-# refuses to guess. This overrides what it actually searches with, per
-# branch, when that's happened and been confirmed.
-CASHONTAB_SEARCH_OVERRIDES = {
+# refuses to guess between them.
+#
+# Tried overriding the search box's query itself with the code (same fix
+# as the victoriascent.co.il supplier), but confirmed live 2026-08-27 that
+# doesn't work here: unlike ספק, the מחסן search box only filters by name,
+# not by code -- searching a bare code just returns zero results instead
+# of narrowing anything down. So this maps a branch name to the specific
+# קוד מחסן to pick among the name search's otherwise-ambiguous results
+# instead (cashontab_bot.py's _pick_unique_search_result(expected_code=)).
+CASHONTAB_CODE_DISAMBIGUATION = {
     # Two מחסן rows are both named "בית דגן" (codes 8 and 24) -- Kateryna
-    # confirmed 2026-08-27 this branch is always code 24. Search by code
-    # instead of the ambiguous name.
+    # confirmed 2026-08-27 this branch is always code 24.
     "בית דגן": "24",
 }
 
 
-def cashontab_search_value(branch):
-    """What cashontab_bot.py should actually type into the מחסן search box
-    for this branch -- an override (code) if the plain name is ambiguous in
-    Cash On Tab, otherwise the branch name itself."""
-    return CASHONTAB_SEARCH_OVERRIDES.get(branch) or branch
+def cashontab_code_hint(branch):
+    """The קוד מחסן to disambiguate with if this branch's name search in
+    Cash On Tab returns more than one row, or None if that's never
+    happened for it."""
+    return CASHONTAB_CODE_DISAMBIGUATION.get(branch)
 
 
 def detect_branch(text: str) -> str | None:

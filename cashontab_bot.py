@@ -174,12 +174,22 @@ def _fill_field_in_row(page, label_text, value):
         _fail(page, f'לא נמצא שדה טקסט ליד "{label_text}"')
 
 
-def _pick_unique_search_result(page, what, query):
+def _pick_unique_search_result(page, what, query, expected_code=None):
     """Cash On Tab's search dialogs (מחסן / קוד ספק / קוד פריט) all follow the
     same pattern: a search box filters a results table, each row has a
     "בחר" button. Types `query`, then requires EXACTLY one visible row
     containing it -- zero or multiple matches is a hard stop (see the "не
-    гадать" rule in the playbook), never a guess."""
+    гадать" rule in the playbook), never a guess.
+
+    `expected_code` is an escape hatch for the case where Cash On Tab
+    genuinely has two rows with the identical name -- live run 2026-08-27:
+    two מחסן rows are both named "בית דגן" (codes 8 and 24), and unlike
+    ספק (where searching a code directly filters correctly), the מחסן
+    search box only filters by name, so searching the code itself returns
+    zero results instead of narrowing it down. When multiple rows match
+    the name and expected_code is given, pick the one row whose own code
+    column (the row's last <td>) exactly equals it, instead of failing on
+    the ambiguity."""
     try:
         page.get_by_placeholder("חפש", exact=False).first.fill(query, timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
@@ -190,10 +200,26 @@ def _pick_unique_search_result(page, what, query):
     count = rows.count()
     if count == 0:
         _fail(page, f'החיפוש "{query}" לא החזיר תוצאות ({what}) -- לבדוק את הכתיב מול Cash On Tab')
+
+    target_row = rows.first
     if count > 1:
-        _fail(page, f'החיפוש "{query}" החזיר {count} תוצאות ({what}) -- לא ברור איזו למלАי')
+        if expected_code is None:
+            _fail(page, f'החיפוש "{query}" החזיר {count} תוצאות ({what}) -- לא ברור איזו למלАי')
+        target_row = None
+        for i in range(count):
+            candidate = rows.nth(i)
+            try:
+                code_text = candidate.locator("td").last.inner_text(timeout=_TIMEOUT_MS).strip()
+            except PlaywrightTimeoutError:
+                continue
+            if code_text == str(expected_code):
+                target_row = candidate
+                break
+        if target_row is None:
+            _fail(page, f'החיפוש "{query}" החזיר {count} תוצאות ({what}), אך אף אחת עם קוד "{expected_code}"')
+
     try:
-        rows.first.get_by_role("button", name="בחר").click(timeout=_TIMEOUT_MS)
+        target_row.get_by_role("button", name="בחר").click(timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
         _fail(page, f'נמצאה שורה מתאימה ל-"{query}" ({what}) אך לא נלחץ עליה כראוי')
 
@@ -400,7 +426,7 @@ def enter_invoice(invoice: dict) -> dict:
                 _pick_unique_search_result(page, "עובד", _DEFAULT_EMPLOYEE_CODE)
 
                 _open_picker_near_label(page, "קוד מחסן")
-                _pick_unique_search_result(page, "מחסן", invoice["branch"])
+                _pick_unique_search_result(page, "מחסן", invoice["branch"], expected_code=invoice.get("branch_code_hint"))
 
                 _open_picker_near_label(page, "קוד ספק")
                 _pick_unique_search_result(page, "ספק", invoice["supplier_name"])
