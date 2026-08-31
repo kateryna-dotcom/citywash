@@ -472,6 +472,24 @@ def enter_invoice(invoice: dict) -> dict:
                     ).get_by_role("button", name="צור מסמך", exact=True).click(timeout=3000)
                 except PlaywrightTimeoutError:
                     pass
+
+                # A second, different dialog can also pop here: "עדכון
+                # שינויים במחירי עלות" (update cost-price changes), when
+                # this document's price differs from the item's default
+                # supplier cost price. Kateryna confirmed 2026-08-27 the
+                # default cost price should NOT be updated from this
+                # document -- click "אל תעדכן" (don't update) to dismiss
+                # it and proceed. Same text-then-ancestor approach, same
+                # best-effort/generous-wait reasoning as the אזהרה dialog
+                # above.
+                try:
+                    cost_price_title = page.locator(':text-is("עדכון שינויים במחירי עלות")').first
+                    cost_price_title.wait_for(state="visible", timeout=5000)
+                    cost_price_title.locator(
+                        "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' ant-modal ')][1]"
+                    ).get_by_role("button", name="אל תעדכן", exact=True).click(timeout=3000)
+                except PlaywrightTimeoutError:
+                    pass
                 page.wait_for_load_state("networkidle", timeout=_TIMEOUT_MS)
 
                 # Verify the save actually happened instead of trusting a
@@ -500,7 +518,7 @@ def enter_invoice(invoice: dict) -> dict:
                         .get_by_role("button", name="ביטול") \
                         .wait_for(state="hidden", timeout=10000)
                 except PlaywrightTimeoutError:
-                    _fail(page, 'לחצתי "צור והצג מסמך" בלי שגיאה, אבל הטופס (כפתור "ביטול") עדיין פתוח -- ' +
+                    _fail(page, 'לחצתי "צור מסמך" בלי שגיאה, אבל הטופס (כפתור "ביטול") עדיין פתוח -- ' +
                           "נראה שהמסמך לא נשמר בפועל למרות שהלחיצה עצמה הצליחה")
             except CashOnTabError:
                 _cancel_partial_document(page)
