@@ -284,9 +284,9 @@ def _fill_line_item(page, item):
     "wrong" input). So the data row is the *second-to-last* <tr>, not the
     last. A single empty pair (#0) already exists as soon as the tab opens
     -- there is no "+"/add-row button (confirmed by Kateryna 2026-08-27).
-    קוד פריט opens a real "בחירת פריט" search-picker modal (same shape as
-    the מחסן/ספק pickers) via the row's own search icon -- selecting a
-    result there auto-fills תיאור and a default price, and is assumed
+    Type the item code directly into the data row's קוד פריט input and
+    press Enter -- not a search-picker dialog like מחסן/ספק (confirmed by
+    Kateryna) -- which auto-fills תיאור and a default price, and is assumed
     (unconfirmed) to open a new empty row-pair below for the next item.
     Then set כמות (best-effort -- see below) and click the row's own שמור
     button to confirm it -- distinct from the document-level צור מסמך at
@@ -307,21 +307,22 @@ def _fill_line_item(page, item):
     פריט before typing into it (Kateryna's fix, 2026-08-27), instead of
     relying on the row already being empty."""
     row = _find_item_row(page)
-    # Live run 2026-08-27: typing the code directly into the row's inline
-    # קוד פריט input and pressing Enter left stale text from the
-    # *previous* item behind -- item code "1080015" showed up in the
-    # picker's own search box as "10800081080015" (the previous item's
-    # "1080008" with the new code appended, not replaced -- the row input
-    # and the picker's search box don't share state the way Enter alone
-    # made it look). Click the row's search icon to open the real
-    # "בחירת פריט" modal, then use the same _pick_unique_search_result
-    # every other picker (מחסן/ספק) uses -- its .fill() clears the search
-    # box first, so no stale text survives between items.
     try:
-        row.locator(".anticon-search").first.click(timeout=_TIMEOUT_MS)
+        code_input = row.locator("input").first
+        code_input.fill("", timeout=_TIMEOUT_MS)
+        code_input.fill(item["code"], timeout=_TIMEOUT_MS)
+        code_input.press("Enter")
     except PlaywrightTimeoutError:
-        _fail(page, f'לא נמצא כפתור החיפוש לשדה "קוד פריט" (פריט {item.get("code")})')
-    _pick_unique_search_result(page, "פריט", item["code"])
+        _fail(page, f'לא נמצא שדה "קוד פריט" בשורה החדשה (פריט {item.get("code")})')
+    # Enter alone was seen to not always trigger the lookup (תיאור/price
+    # stayed empty) -- Kateryna confirmed the same search icon inside that
+    # cell does the same thing, so click it too as a belt-and-suspenders
+    # second trigger. Best-effort: if the icon isn't there, Enter above may
+    # still have worked, so don't fail the whole run over this alone.
+    try:
+        row.locator(".anticon-search").first.click(timeout=2000)
+    except PlaywrightTimeoutError:
+        pass
     page.wait_for_timeout(1000)
 
     # כמות has no real <label> (same issue as מספר תעודת ספק earlier) --
