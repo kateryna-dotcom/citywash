@@ -187,9 +187,11 @@ def _pick_unique_search_result(page, what, query, expected_code=None):
     ספק (where searching a code directly filters correctly), the מחסן
     search box only filters by name, so searching the code itself returns
     zero results instead of narrowing it down. When multiple rows match
-    the name and expected_code is given, pick the one row whose own code
-    column (the row's last <td>) exactly equals it, instead of failing on
-    the ambiguity."""
+    the name and expected_code is given, pick the one row that has a <td>
+    somewhere in it exactly equal to the code -- assuming the code sits in
+    the row's *last* <td> failed live (found 2 rows, neither "had" the
+    code), so this checks every cell instead of guessing a column
+    position."""
     try:
         page.get_by_placeholder("חפש", exact=False).first.fill(query, timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
@@ -208,12 +210,20 @@ def _pick_unique_search_result(page, what, query, expected_code=None):
         target_row = None
         for i in range(count):
             candidate = rows.nth(i)
+            cells = candidate.locator("td")
             try:
-                code_text = candidate.locator("td").last.inner_text(timeout=_TIMEOUT_MS).strip()
+                cell_count = cells.count()
             except PlaywrightTimeoutError:
                 continue
-            if code_text == str(expected_code):
-                target_row = candidate
+            for j in range(cell_count):
+                try:
+                    cell_text = cells.nth(j).inner_text(timeout=1000).strip()
+                except PlaywrightTimeoutError:
+                    continue
+                if cell_text == str(expected_code):
+                    target_row = candidate
+                    break
+            if target_row is not None:
                 break
         if target_row is None:
             _fail(page, f'החיפוש "{query}" החזיר {count} תוצאות ({what}), אך אף אחת עם קוד "{expected_code}"')
