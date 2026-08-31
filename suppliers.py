@@ -12,9 +12,11 @@ SUPPLIER_CASHONTAB_NAMES = {
     "hadarrosen.com": "הדר רוזן",
     "emi-1.com": "אי.אם.איי מערכות שטיפה",
     "moshaev-inv.com": "וואש סנטר",
-    "oz-b-g.com": "עוז בת גלים",
     "pavilion-spark.co.il": "ביתן ספארק סחר בע\"מ",
     "victoriascent.co.il": "ויקטוריה מוצרי ריח בע\"מ",
+    # Best guess from the sender display name on their e-invoice emails --
+    # not yet confirmed against Cash On Tab's actual ספק list (2026-08-31).
+    "grow.security": "אמפייר אס",
 }
 
 # Cash On Tab's own ספק search sometimes doesn't match SUPPLIER_CASHONTAB_NAMES
