@@ -67,6 +67,16 @@ def _clean_key(s: str) -> str:
 clean_key = _clean_key
 
 
+def description_key(description: str) -> str:
+    """Fallback item_mappings key for suppliers whose invoices print no
+    sku/barcode at all (e.g. grow.security / אמפייר אס) -- the normalized
+    product description stands in for a sku so a mapping she confirms once
+    is still recognized (and never asked about again) the next time this
+    same product name appears on an invoice from that supplier, even
+    without a stable code to key it on."""
+    return _normalize(description)
+
+
 def reload():
     """Forces the next _load() to re-read the catalogue from scratch --
     called right after a live sync (catalog_store.replace_catalog) so the
@@ -228,10 +238,13 @@ def match_item(line_item: dict, learned_mapping: dict = None) -> dict:
 
 def match_invoice_items(line_items: list, learned_mappings: dict = None) -> list:
     """Same as match_item over a whole invoice. `learned_mappings` maps
-    supplier_sku -> mapping row for the invoice's supplier."""
+    supplier_sku (or, for a skuless supplier, description_key(description))
+    -> mapping row for the invoice's supplier."""
     learned_mappings = learned_mappings or {}
     out = []
     for line_item in line_items or []:
         key = _clean_key(line_item.get("sku") or line_item.get("barcode") or "")
+        if not key:
+            key = description_key(line_item.get("description", ""))
         out.append(match_item(line_item, learned_mappings.get(key)))
     return out
