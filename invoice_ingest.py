@@ -578,6 +578,49 @@ def parse_victoria_scent(text: str, pdf_bytes: bytes = None) -> list:
     return items
 
 
+# grow.security ("אמפייר אס" -- e-invoices sent via the Grow billing
+# platform). Under pdftotext -layout the column order (as it appears in the
+# raw text stream) is: total, price (both "₪"-prefixed), description
+# (פירוט), qty, then מק"ט -- but built from the one real sample seen so far
+# (invoice 3741) the מק"ט cell is genuinely blank; this supplier's invoices
+# don't print a product code at all (confirmed by Kateryna 2026-09-01), so
+# sku always comes back None here and these items rely on the review UI's
+# name-search matching instead of a learned per-sku mapping. No legacy
+# (pypdf plain-extract) fallback: unlike the other suppliers, pypdf's plain
+# extraction reverses this PDF's Hebrew character-by-character in
+# unpredictable fragment lengths (not just per-line), which no regex here
+# could reliably parse -- pdftotext -layout is required.
+_GROW_LAYOUT_ROW_RE = re.compile(
+    r'₪\s*(?P<total>[\d,]+\.\d{2})[ \t]+'
+    r'₪\s*(?P<price>[\d,]+\.\d{2})[ \t]+'
+    r'(?P<desc>.+?)[ \t]+'
+    r'(?P<qty>\d+)'
+    r'(?:[ \t]+(?P<sku>\S+))?'
+    r'[ \t]*$',
+    re.MULTILINE,
+)
+
+
+def _parse_grow_layout(text: str) -> list:
+    items = []
+    for m in _GROW_LAYOUT_ROW_RE.finditer(text):
+        qty, price, total = _num(m.group("qty")), _num(m.group("price")), _num(m.group("total"))
+        confident = None not in (qty, price, total) and abs(round(qty * price, 2) - total) < 0.5
+        items.append({
+            "sku": m.group("sku"), "description": m.group("desc").strip(),
+            "quantity": qty, "unit_price": price, "total": total, "confident": confident,
+        })
+    return items
+
+
+def parse_grow_security(text: str, pdf_bytes: bytes = None) -> list:
+    if pdf_bytes:
+        layout_text = _extract_pdf_text_layout(pdf_bytes)
+        if layout_text:
+            return _parse_grow_layout(layout_text)
+    return []
+
+
 _LINE_ITEM_PARSERS = {
     "emi-1.com": parse_emi,
     "moshaev-inv.com": parse_moshaev,
@@ -585,6 +628,7 @@ _LINE_ITEM_PARSERS = {
     "hadarrosen.com": parse_hadarrosen,
     "pavilion-spark.co.il": parse_pavilion_spark,
     "victoriascent.co.il": parse_victoria_scent,
+    "grow.security": parse_grow_security,
 }
 
 
