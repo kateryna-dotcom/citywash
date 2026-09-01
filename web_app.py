@@ -889,16 +889,14 @@ async def inventory_match_item(record_id: int, item_index: int, request: Request
     """Resolves a line item the automatic matcher couldn't confidently
     place: either Kateryna types/scans the Cash On Tab barcode of the
     correct product, or searches the catalogue by name and picks a result
-    ("matched"), or marks it as never-to-be-entered ("skip"). When the line
-    item has a supplier SKU, the decision is also saved to item_mappings so
-    this exact supplier SKU is never asked about again on future invoices.
-    Some suppliers' invoices (e.g. אמפייר אס / grow.security) print no
-    מק"ט at all -- the parser then has nothing to key a mapping on, so for
-    those the resolution is applied to this line item only and nothing is
-    remembered for next time; she'll search by name again on the next
-    invoice, which is still much faster than being unable to resolve it at
-    all (the previous behavior: a hard 400 blocked confirmation entirely
-    whenever sku was empty)."""
+    ("matched"), or marks it as never-to-be-entered ("skip"). The decision
+    is also saved to item_mappings so the same product is never asked about
+    again on future invoices. Normally keyed by the supplier's own sku, but
+    some suppliers' invoices (e.g. אמפייר אס / grow.security) print no מק"ט
+    at all -- for those the mapping is keyed by the normalized product
+    description instead (item_matcher.description_key), so it's still
+    remembered next time the same product name shows up on an invoice from
+    that supplier, even with no stable code to key it on."""
     unauthorized = _require_api_auth(request)
     if unauthorized:
         return unauthorized
@@ -921,15 +919,17 @@ async def inventory_match_item(record_id: int, item_index: int, request: Request
     supplier_domain = record.get("supplier_domain") or ""
     # Clean in case this line item was stored before the bidi-mark fix --
     # keeps the mapping key consistent with what future (already-clean)
-    # ingests will look up. Empty when the supplier's invoice has no מק"ט
-    # at all -- there's then no stable key to save a reusable mapping under,
-    # but the line item itself can still be resolved below.
+    # ingests will look up. Falls back to a description-derived key when
+    # the supplier's invoice has no מק"ט at all (see item_matcher.
+    # description_key), so there's always something stable to save a
+    # reusable mapping under.
     sku = item_matcher.clean_key(line_item.get("sku") or line_item.get("barcode") or "")
+    mapping_key = sku or item_matcher.description_key(line_item.get("description") or "")
 
     try:
         if action == "skip":
-            if sku:
-                item_mapping_store.upsert_mapping(supplier_domain, sku, "skip")
+            if mapping_key:
+                item_mapping_store.upsert_mapping(supplier_domain, mapping_key, "skip")
             invoice_store.update_line_item(record_id, item_index, {
                 "match_source": "skip", "needs_confirmation": False,
                 "matched_code": None, "matched_barcode": None, "matched_name": None,
@@ -951,9 +951,9 @@ async def inventory_match_item(record_id: int, item_index: int, request: Request
                 )
             catalog_code = item["code"] if item else barcode
             catalog_name = item["name"] if item else (line_item.get("description") or barcode)
-            if sku:
+            if mapping_key:
                 item_mapping_store.upsert_mapping(
-                    supplier_domain, sku, "matched",
+                    supplier_domain, mapping_key, "matched",
                     catalog_code=catalog_code, catalog_name=catalog_name,
                     notes=None if item else "force-saved: not in the cashontab_catalog.json snapshot at save time",
                 )
