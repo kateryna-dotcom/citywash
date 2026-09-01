@@ -579,17 +579,20 @@ def parse_victoria_scent(text: str, pdf_bytes: bytes = None) -> list:
 
 
 # grow.security ("אמפייר אס" -- e-invoices sent via the Grow billing
-# platform). Under pdftotext -layout the column order (as it appears in the
-# raw text stream) is: total, price (both "₪"-prefixed), description
-# (פירוט), qty, then מק"ט -- but built from the one real sample seen so far
-# (invoice 3741) the מק"ט cell is genuinely blank; this supplier's invoices
-# don't print a product code at all (confirmed by Kateryna 2026-09-01), so
-# sku always comes back None here and these items rely on the review UI's
-# name-search matching instead of a learned per-sku mapping. No legacy
-# (pypdf plain-extract) fallback: unlike the other suppliers, pypdf's plain
-# extraction reverses this PDF's Hebrew character-by-character in
-# unpredictable fragment lengths (not just per-line), which no regex here
-# could reliably parse -- pdftotext -layout is required.
+# platform). Under a layout-preserving extraction the column order (as it
+# appears in the raw text stream) is: total, price (both "₪"-prefixed),
+# description (פירוט), qty, then מק"ט -- but built from the one real sample
+# seen so far (invoice 3741) the מק"ט cell is genuinely blank; this
+# supplier's invoices don't print a product code at all (confirmed by
+# Kateryna 2026-09-01), so sku always comes back None here and these items
+# rely on the review UI's name-search matching instead of a learned
+# per-sku mapping. No legacy (pypdf plain-extract, no layout mode) fallback:
+# unlike the other suppliers, pypdf's plain extraction reverses this PDF's
+# Hebrew character-by-character in unpredictable fragment lengths (not just
+# per-line), which no regex here could reliably parse -- a layout-preserving
+# extraction is required. Column gaps can be many spaces wide (layout mode
+# pads to align columns), hence the liberal [ \t]+ and the whitespace
+# collapse on desc below.
 _GROW_LAYOUT_ROW_RE = re.compile(
     r'₪\s*(?P<total>[\d,]+\.\d{2})[ \t]+'
     r'₪\s*(?P<price>[\d,]+\.\d{2})[ \t]+'
@@ -607,17 +610,34 @@ def _parse_grow_layout(text: str) -> list:
         qty, price, total = _num(m.group("qty")), _num(m.group("price")), _num(m.group("total"))
         confident = None not in (qty, price, total) and abs(round(qty * price, 2) - total) < 0.5
         items.append({
-            "sku": m.group("sku"), "description": m.group("desc").strip(),
+            "sku": m.group("sku"), "description": re.sub(r"\s+", " ", m.group("desc")).strip(),
             "quantity": qty, "unit_price": price, "total": total, "confident": confident,
         })
     return items
 
 
 def parse_grow_security(text: str, pdf_bytes: bytes = None) -> list:
-    if pdf_bytes:
-        layout_text = _extract_pdf_text_layout(pdf_bytes)
-        if layout_text:
-            return _parse_grow_layout(layout_text)
+    if not pdf_bytes:
+        return []
+    # Primary: pypdf's own layout-preserving extraction -- pure Python, no
+    # dependency on the pdftotext binary actually being reachable/working
+    # in whatever container this runs in (unlike every other supplier's
+    # parser here, which shells out via _extract_pdf_text_layout).
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        layout_text = "\n".join((page.extract_text(extraction_mode="layout") or "") for page in reader.pages)
+    except Exception:  # noqa: BLE001
+        layout_text = ""
+    if layout_text:
+        items = _parse_grow_layout(layout_text)
+        if items:
+            return items
+    # Fallback: the pdftotext -layout subprocess other suppliers use, in
+    # case a future אמפייר אס invoice renders differently under pypdf's
+    # layout mode than it does under poppler's.
+    layout_text = _extract_pdf_text_layout(pdf_bytes)
+    if layout_text:
+        return _parse_grow_layout(layout_text)
     return []
 
 
