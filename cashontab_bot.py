@@ -478,6 +478,22 @@ def enter_invoice(invoice: dict) -> dict:
                 except PlaywrightTimeoutError:
                     _fail(page, "לחיצה על \"צור מסמך\" הסופית לא הושלמה כצפוי")
 
+                # A third possible dialog: "שים לב!" (attention) when the
+                # invoice's own printed date doesn't match today's date --
+                # e.g. an invoice received/entered days after it was issued.
+                # Kateryna confirmed 2026-09-07 this is normal/expected and
+                # the bot should just proceed -- click its own "צור מסמך" to
+                # dismiss it, same text-then-ancestor approach as the other
+                # post-save dialogs here.
+                try:
+                    date_mismatch_title = page.locator(':text-is("שים לב!")').first
+                    date_mismatch_title.wait_for(state="visible", timeout=5000)
+                    date_mismatch_title.locator(
+                        "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' ant-modal ')][1]"
+                    ).get_by_role("button", name="צור מסמך", exact=True).click(timeout=3000)
+                except PlaywrightTimeoutError:
+                    pass
+
                 # That click can pop an "אזהרה" (warning) confirm dialog --
                 # e.g. "פריט כפול בתעודה" (duplicate line item) -- which
                 # blocks the actual save until confirmed. Live run
