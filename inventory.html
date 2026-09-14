@@ -119,6 +119,8 @@
       <select id="supplierFilter" onchange="applyFiltersAndRender()">
         <option value="">כל הספקים</option>
       </select>
+      <input type="text" id="invoiceNumberFilter" placeholder="חיפוש לפי מס' חשבונית"
+             oninput="applyFiltersAndRender()" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;">
       <label class="status-msg" style="margin-inline-start:4px;">מתאריך:
         <input type="date" id="dateFrom" onchange="applyFiltersAndRender()">
       </label>
@@ -249,11 +251,16 @@ function applyFiltersAndRender() {
   const supplier = document.getElementById("supplierFilter").value;
   const dateFrom = document.getElementById("dateFrom").value;
   const dateTo = document.getElementById("dateTo").value;
+  const invoiceNumberQuery = document.getElementById("invoiceNumberFilter").value.trim();
 
   let records = RAW_RECORDS;
   if (supplier) records = records.filter(r => r.supplier_domain === supplier);
   if (dateFrom) records = records.filter(r => { const d = recordDateStr(r); return d && d >= dateFrom; });
   if (dateTo) records = records.filter(r => { const d = recordDateStr(r); return d && d <= dateTo; });
+  // Substring match, combined (AND) with the filters above -- /api/inventory/list
+  // already backfills invoice_number for records whose stored value is
+  // still blank, so this also finds those without any extra parsing here.
+  if (invoiceNumberQuery) records = records.filter(r => (r.invoice_number || "").includes(invoiceNumberQuery));
 
   renderCards(records);
   renderSummary(records);
@@ -645,6 +652,7 @@ function clearFilters() {
   document.getElementById("supplierFilter").value = "";
   document.getElementById("dateFrom").value = "";
   document.getElementById("dateTo").value = "";
+  document.getElementById("invoiceNumberFilter").value = "";
   applyFiltersAndRender();
 }
 
