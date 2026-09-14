@@ -832,10 +832,11 @@ def inventory_check_now(request: Request):
 
 @app.post("/api/inventory/reparse/{record_id}")
 def inventory_reparse(record_id: int, request: Request):
-    """Re-runs the line-item parser against this invoice's already-stored
-    raw_text (and original PDF, if we have it) -- for records ingested
-    before a parser fix (or bug), so she doesn't have to wait for/trigger a
-    fresh Gmail fetch to pick it up."""
+    """Re-runs the line-item parser (and, if it's still blank, the
+    invoice-number detector) against this invoice's already-stored
+    raw_text/subject and original PDF, if we have it -- for records
+    ingested before a parser fix (or bug), so she doesn't have to wait
+    for/trigger a fresh Gmail fetch to pick it up."""
     unauthorized = _require_api_auth(request)
     if unauthorized:
         return unauthorized
@@ -848,6 +849,15 @@ def inventory_reparse(record_id: int, request: Request):
             record.get("supplier_domain") or "", record.get("raw_text") or "", pdf_bytes=pdf_bytes
         )
         invoice_store.update_line_items(record_id, line_items or None)
+        # Only backfills a blank invoice_number (e.g. grow.security records
+        # ingested before the עסקה-subject fallback existed) -- never
+        # overwrites one she may have corrected by hand.
+        if not record.get("invoice_number"):
+            invoice_number = invoice_ingest.guess_invoice_number(
+                record.get("subject") or "", record.get("raw_text") or "", pdf_bytes=pdf_bytes
+            )
+            if invoice_number:
+                invoice_store.update_invoice_number(record_id, invoice_number)
     except Exception as e:  # noqa: BLE001
         return Response(f"Error reparsing invoice: {e}", status_code=500)
     return {"status": "reparsed", "item_count": len(line_items or [])}

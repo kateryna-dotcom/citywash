@@ -37,6 +37,18 @@ _INVOICE_NUMBER_RE = re.compile(
     r"(?:חשבונית\s*מס'?|מספר\s*תעודה|תעודה\s*מס'?)\s*[:\-]?\s*([A-Za-z0-9\-]+)"
 )
 
+# grow.security's own subject line ("חשבונית מס עבור עסקה 3739 ב- אמפייר
+# אס") doesn't match _INVOICE_NUMBER_RE above -- "עבור עסקה" sits between
+# "מס" and the number, so the two aren't adjacent -- and its PDF's plain
+# pypdf-extracted text mangles "חשבונית מס" beyond matching too (see
+# parse_grow_security's docstring on the per-fragment character reversal).
+# Both together meant invoice_number silently came back "" for every
+# grow.security invoice (confirmed live 2026-09-14: the Cash On Tab
+# "מספר תעודת ספק" field came back empty during auto-entry) -- catch the
+# number straight off "עסקה" in the subject instead, which needs no PDF
+# parsing at all.
+_TRANSACTION_NUMBER_RE = re.compile(r"עסקה\s*[:\-]?\s*(\d+)")
+
 _HEBREW_CHAR_RE = re.compile(r"[֐-׿]")
 
 
@@ -709,7 +721,7 @@ def _guess_branch(subject: str, text: str) -> str:
     return branches.detect_branch(text) or ""
 
 
-def _guess_invoice_number(subject: str, text: str) -> str:
+def guess_invoice_number(subject: str, text: str, pdf_bytes: bytes = None) -> str:
     for source in (subject or "", text or ""):
         m = _INVOICE_NUMBER_RE.search(source)
         if m:
@@ -720,6 +732,20 @@ def _guess_invoice_number(subject: str, text: str) -> str:
         m = _PAVILION_INVOICE_RE.search(source)
         if m:
             return m.group(0)
+        # grow.security -- see _TRANSACTION_NUMBER_RE's comment.
+        m = _TRANSACTION_NUMBER_RE.search(source)
+        if m:
+            return m.group(1).strip()
+    # Last resort: re-extract via pdftotext -layout, which (unlike pypdf's
+    # plain extraction) keeps "חשבונית מס <number>" in normal reading order
+    # for grow.security's PDFs -- confirmed against a real sample. Only
+    # reached when every text-only signal above missed.
+    if pdf_bytes:
+        layout_text = _extract_pdf_text_layout(pdf_bytes)
+        if layout_text:
+            m = _INVOICE_NUMBER_RE.search(layout_text)
+            if m:
+                return m.group(1).strip()
     return ""
 
 
@@ -763,7 +789,7 @@ def process_new_invoices(lookback_days: int = 30) -> dict:
                     "pdf_filename": None,
                     "raw_text": "",
                     "branch": _guess_branch(subject, ""),
-                    "invoice_number": _guess_invoice_number(subject, ""),
+                    "invoice_number": guess_invoice_number(subject, ""),
                     "line_items": None,
                     "status": "no_pdf_found",
                 })
@@ -787,7 +813,7 @@ def process_new_invoices(lookback_days: int = 30) -> dict:
                 "raw_text": text,
                 "pdf_data": pdf_bytes,
                 "branch": _guess_branch(subject, text),
-                "invoice_number": _guess_invoice_number(subject, text),
+                "invoice_number": guess_invoice_number(subject, text, pdf_bytes=pdf_bytes),
                 "line_items": line_items or None,
                 "status": "needs_review",
             })
