@@ -64,6 +64,7 @@
   .items-table th { text-align: right; color: #5b7186; font-weight: 600; padding: 4px 8px; border-bottom: 1px solid var(--border); }
   .items-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
   .items-table tr.low-confidence td { background: var(--red-light); }
+  .items-table tr.items-total-row td { border-top: 2px solid var(--border); border-bottom: none; background: var(--blue-light); }
   .items-table .num { direction: ltr; text-align: left; }
   .match-badge { font-size: 11.5px; padding: 2px 8px; border-radius: 12px; font-weight: 600; white-space: nowrap; display: inline-block; }
   .match-badge.ok { background: var(--green-light); color: var(--green); }
@@ -130,6 +131,12 @@
     </div>
   </div>
 
+  <div class="top-controls" style="margin-bottom:14px;">
+    <span class="status-msg">הצגת סכומים:</span>
+    <button class="btn small" id="vatBtnExcl" onclick="setVatMode('excl')">ללא מע"מ</button>
+    <button class="btn small secondary" id="vatBtnIncl" onclick="setVatMode('incl')">כולל מע"מ</button>
+  </div>
+
   <div class="catalog-sync" id="summaryBar"></div>
 
   <div class="catalog-sync">
@@ -146,6 +153,32 @@
 
 <script>
 let branchOptions = [];
+
+// "ללא מע"מ" (matches what's stored -- line_items totals come straight off
+// Cash On Tab's own pre-VAT price, see cashontab_bot.py's _fill_line_item)
+// vs "כולל מע"מ" for every sum shown on this page. Israel's VAT rate is set
+// by law and applies uniformly to every invoice regardless of supplier --
+// it's not something that varies invoice to invoice, so one constant here
+// (rather than trying to re-derive it per invoice from each supplier's own
+// raw text) already matches what every real invoice prints. Update this if
+// the statutory rate changes.
+const VAT_RATE = 0.18;
+let vatMode = "excl"; // "excl" | "incl"
+
+function vatAdjust(amount) {
+  return vatMode === "incl" ? amount * (1 + VAT_RATE) : amount;
+}
+
+function fmtCurrency(amount) {
+  return vatAdjust(amount).toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function setVatMode(mode) {
+  vatMode = mode;
+  document.getElementById("vatBtnExcl").className = "btn small" + (mode === "excl" ? "" : " secondary");
+  document.getElementById("vatBtnIncl").className = "btn small" + (mode === "incl" ? "" : " secondary");
+  applyFiltersAndRender();
+}
 
 async function loadBranchOptions() {
   const res = await fetch("/api/inventory/branch-options");
@@ -226,13 +259,39 @@ function applyFiltersAndRender() {
   renderSummary(records);
 }
 
+function invoiceItemsTotal(r) {
+  let total = 0;
+  (r.line_items || []).forEach(it => { total += Number(it.total) || 0; });
+  return total;
+}
+
 function renderSummary(records) {
   const bar = document.getElementById("summaryBar");
   if (!RAW_RECORDS.length) { bar.innerHTML = ""; return; }
-  let total = 0;
-  records.forEach(r => (r.line_items || []).forEach(it => { total += Number(it.total) || 0; }));
-  const totalStr = total.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  bar.innerHTML = `מציג <strong>${records.length}</strong> חשבוניות מתוך ${RAW_RECORDS.length} &nbsp;·&nbsp; סה"כ מוצג: <strong>₪${totalStr}</strong>`;
+
+  let shownTotal = 0;
+  records.forEach(r => { shownTotal += invoiceItemsTotal(r); });
+
+  // Current calendar month, only invoices she's actually marked as handled
+  // (טופל -- status "ok") -- not ones still sitting in review, per her
+  // request 2026-09-14. Respects the branch/supplier filters already
+  // applied to `records` -- reacts the same way the shown-total figure
+  // does -- but deliberately ignores the מתאריך/עד תאריך pickers, since
+  // "this month" is its own fixed concept, not whatever range is dialed in.
+  const now = new Date();
+  const monthRecords = records.filter(r => {
+    if (r.status !== "ok" || !r.received_at) return false;
+    const d = new Date(r.received_at);
+    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+  });
+  let monthTotal = 0;
+  monthRecords.forEach(r => { monthTotal += invoiceItemsTotal(r); });
+
+  bar.innerHTML = `
+    מציג <strong>${records.length}</strong> חשבוניות מתוך ${RAW_RECORDS.length} &nbsp;·&nbsp;
+    סה"כ מוצג: <strong>₪${fmtCurrency(shownTotal)}</strong>
+    &nbsp;·&nbsp; סה"כ קניות החודש (שטופלו): <strong>₪${fmtCurrency(monthTotal)}</strong>
+  `;
 }
 
 function renderCards(records) {
@@ -274,6 +333,13 @@ function renderCards(records) {
             </tr>`;
           }).join("")}
         </tbody>
+        <tfoot>
+          <tr class="items-total-row">
+            <td colspan="5" style="text-align:left;font-weight:600;">סה"כ לחשבונית ${vatMode === "incl" ? '(כולל מע"מ)' : '(ללא מע"מ)'}:</td>
+            <td class="num" style="font-weight:700;">₪${fmtCurrency(invoiceItemsTotal(r))}</td>
+            <td colspan="2"></td>
+          </tr>
+        </tfoot>
       </table>
       ${anyLowConf ? `<div style="margin-top:6px;color:var(--red);font-size:12.5px;">🔴 = הסכום (כמות × מחיר) לא תואם את הסכום בחשבונית — הפריט עדיין יוזן, בדוק/י את הסכום ולחצ/י "תיקנתי".</div>` : ""}
       ` : `<div style="margin-top:8px;color:#5b7186;font-size:13px;">
