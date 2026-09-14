@@ -287,7 +287,9 @@ function renderCards(records) {
           <div>
             <div class="card-title">${escapeHtml(r.subject || "(ללא נושא)")}</div>
             <div class="card-sub">${escapeHtml(r.sender_email || "")} · ${escapeHtml(received)}
-              ${r.invoice_number ? " · מס' חשבונית: " + escapeHtml(r.invoice_number) : ""}
+              ${r.invoice_number ? " · מס' חשבונית: " + escapeHtml(r.invoice_number) : items.length
+                ? ` · <span style="color:var(--red);">אין מס' חשבונית</span> <button class="toggle-raw" onclick="event.stopPropagation(); reparseInvoice(${r.id})" id="reparse-${r.id}">🔄 פרש מחדש</button>`
+                : ""}
             </div>
           </div>
         </div>
