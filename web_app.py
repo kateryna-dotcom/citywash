@@ -647,7 +647,17 @@ def inventory_list(request: Request, branch: str = None):
     if unauthorized:
         return unauthorized
     try:
-        return invoice_store.list_records(branch=branch)
+        records = invoice_store.list_records(branch=branch)
+        # Same JIT fallback as _ready_for_entry_shape (see its comment) --
+        # applied here too so the card display and the מס' חשבונית search
+        # box both see a number for records whose stored value is still
+        # blank, without needing a reparse or re-deriving this in JS.
+        for r in records:
+            if not r.get("invoice_number"):
+                r["invoice_number"] = invoice_ingest.guess_invoice_number(
+                    r.get("subject") or "", r.get("raw_text") or ""
+                )
+        return records
     except Exception as e:  # noqa: BLE001
         return Response(f"Error loading invoice records: {e}", status_code=500)
 
