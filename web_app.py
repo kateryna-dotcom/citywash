@@ -699,13 +699,26 @@ def _ready_for_entry_shape(r: dict) -> dict | None:
             merged_by_code[code] = entry
         merged_entries.append(entry)
     entries = merged_entries
+    # Falls back to re-deriving the invoice number on the fly when the
+    # stored one is still blank (e.g. a grow.security record ingested
+    # before the עסקה-subject fallback existed) -- confirmed live
+    # 2026-09-14: the "🔄 פרש מחדש" button that would otherwise backfill it
+    # only renders in the UI when an invoice has zero parsed line items, so
+    # for a record like this one (items already parsed, only the number
+    # missing) there was no way to trigger that fix at all. Computed fresh
+    # here instead of relying on any button click -- cheap (subject-only,
+    # no PDF re-fetch) and this is the one code path that actually needs
+    # the value, so it can't go stale.
+    invoice_number = r.get("invoice_number") or invoice_ingest.guess_invoice_number(
+        r.get("subject") or "", r.get("raw_text") or ""
+    )
     return {
         "id": r["id"],
         "branch": r["branch"],
         "branch_code_hint": branches.cashontab_code_hint(r["branch"]),
         "supplier_domain": r.get("supplier_domain"),
         "supplier_name": suppliers.cashontab_search_value(r.get("supplier_domain")),
-        "invoice_number": r.get("invoice_number"),
+        "invoice_number": invoice_number,
         "received_at": r.get("received_at"),
         "items": entries,
     }
