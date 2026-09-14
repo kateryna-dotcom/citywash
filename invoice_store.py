@@ -191,6 +191,19 @@ def update_branch(record_id: int, branch: str):
         conn.commit()
 
 
+def update_invoice_number(record_id: int, invoice_number: str):
+    """Used by /api/inventory/reparse so a fix to invoice-number detection
+    (e.g. a supplier whose subject/PDF text didn't match the regex before)
+    can backfill already-ingested records without a fresh Gmail fetch."""
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE invoice_records SET invoice_number=%s, updated_at=now() WHERE id=%s",
+                (invoice_number, record_id),
+            )
+        conn.commit()
+
+
 def update_status(record_id: int, status: str, note: str = None):
     with _get_conn() as conn:
         with conn.cursor() as cur:
