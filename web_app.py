@@ -42,6 +42,7 @@ from esign import send_for_sms_signature
 import pension_store
 import pension_companies
 import branches
+import companies
 import invoice_store
 import invoice_ingest
 import suppliers
@@ -839,6 +840,31 @@ async def inventory_set_branch(record_id: int, request: Request):
         invoice_store.update_branch(record_id, branch)
     except Exception as e:  # noqa: BLE001
         return Response(f"Error updating branch: {e}", status_code=500)
+    return {"status": "updated"}
+
+
+@app.get("/api/inventory/companies")
+def inventory_companies(request: Request):
+    """City Wash's own billing entities (companies.py) -- used to populate
+    both the editable per-invoice company picker and the מלАי company
+    filter."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    return companies.COMPANY_NAMES
+
+
+@app.post("/api/inventory/set-company/{record_id}")
+async def inventory_set_company(record_id: int, request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    payload = await request.json()
+    company = (payload.get("company") or "").strip()
+    try:
+        invoice_store.update_company(record_id, company)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error updating company: {e}", status_code=500)
     return {"status": "updated"}
 
 

@@ -96,6 +96,23 @@
   }
   .branch-picker.unset { border-color: var(--red); color: var(--red); }
   .empty { text-align: center; color: #5b7186; padding: 60px 20px; }
+  .multiselect { position: relative; display: inline-block; }
+  .multiselect-btn {
+    padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
+    font-size: 14px; font-family: inherit; background: #fff; color: var(--text); cursor: pointer;
+  }
+  .multiselect-panel {
+    display: none; position: absolute; top: 100%; right: 0; z-index: 20;
+    background: #fff; border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px; margin-top: 4px; min-width: 200px; max-height: 280px; overflow-y: auto;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.1);
+  }
+  .multiselect-panel.open { display: block; }
+  .multiselect-option {
+    display: flex; align-items: center; gap: 6px; padding: 5px 6px;
+    font-size: 13.5px; cursor: pointer; border-radius: 5px; white-space: nowrap;
+  }
+  .multiselect-option:hover { background: var(--blue-light); }
   .catalog-sync {
     background: #fff; border: 1px solid var(--border); border-radius: 10px;
     padding: 10px 14px; margin-bottom: 14px; display: flex; align-items: center;
@@ -113,9 +130,14 @@
   <div class="top">
     <h2>📦 מלאי — חשבוניות ספקים</h2>
     <div class="top-controls">
-      <select id="branchFilter" onchange="loadRecords()">
-        <option value="">כל הסניפים</option>
-      </select>
+      <div class="multiselect">
+        <button type="button" class="multiselect-btn" id="branchFilterBtn" onclick="event.stopPropagation(); toggleMultiselectPanel('branchFilterPanel')">כל הסניפים ▾</button>
+        <div class="multiselect-panel" id="branchFilterPanel"></div>
+      </div>
+      <div class="multiselect">
+        <button type="button" class="multiselect-btn" id="companyFilterBtn" onclick="event.stopPropagation(); toggleMultiselectPanel('companyFilterPanel')">כל החברות ▾</button>
+        <div class="multiselect-panel" id="companyFilterPanel"></div>
+      </div>
       <select id="supplierFilter" onchange="applyFiltersAndRender()">
         <option value="">כל הספקים</option>
       </select>
@@ -188,22 +210,81 @@ async function loadBranchOptions() {
   branchOptions = await res.json();
 }
 
+let companyOptions = [];
+async function loadCompanyOptions() {
+  const res = await fetch("/api/inventory/companies");
+  if (!res.ok) return;
+  companyOptions = await res.json();
+}
+
 async function setBranch(recordId, branch) {
   const res = await fetch(`/api/inventory/set-branch/${recordId}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ branch }),
   });
-  if (res.ok) { await loadBranches(); await loadRecords(); }
+  if (res.ok) { await loadRecords(); }
 }
 
-async function loadBranches() {
-  const res = await fetch("/api/inventory/branches");
-  if (!res.ok) return;
-  const branches = await res.json();
-  const sel = document.getElementById("branchFilter");
-  const current = sel.value;
-  sel.innerHTML = '<option value="">כל הסניפים</option>' +
-    branches.map(b => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join("");
-  sel.value = current;
+async function setCompany(recordId, company) {
+  const res = await fetch(`/api/inventory/set-company/${recordId}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ company }),
+  });
+  if (res.ok) { await loadRecords(); }
+}
+
+// Multi-select filter panels (סניף/חברה) -- checkbox lists rather than a
+// native <select multiple>, which needs Ctrl/Cmd-click and reads poorly on
+// mobile. Options are derived from what's actually present in RAW_RECORDS
+// (like the existing supplier filter already does), not the full canonical
+// list, so the panel doesn't show branches/companies that have never
+// appeared on an invoice.
+let selectedBranches = new Set();
+let selectedCompanies = new Set();
+
+function toggleMultiselectPanel(panelId) {
+  document.querySelectorAll(".multiselect-panel").forEach(p => { if (p.id !== panelId) p.classList.remove("open"); });
+  document.getElementById(panelId).classList.toggle("open");
+}
+document.addEventListener("click", e => {
+  if (!e.target.closest(".multiselect")) {
+    document.querySelectorAll(".multiselect-panel").forEach(p => p.classList.remove("open"));
+  }
+});
+
+function multiselectOptionsHtml(options, selectedSet, onChangeFn) {
+  return options.map(opt => `
+    <label class="multiselect-option">
+      <input type="checkbox" value="${escapeHtml(opt)}" ${selectedSet.has(opt) ? "checked" : ""} onchange="${onChangeFn}(this.value, this.checked)">
+      ${escapeHtml(opt)}
+    </label>
+  `).join("") || `<div style="padding:6px;color:#5b7186;font-size:12.5px;">אין נתונים</div>`;
+}
+
+function updateMultiselectLabel(btnId, selectedSet, allLabel) {
+  document.getElementById(btnId).textContent = (selectedSet.size ? `${selectedSet.size} נבחרו` : allLabel) + " ▾";
+}
+
+function populateBranchFilterPanel() {
+  const options = [...new Set(RAW_RECORDS.map(r => r.branch).filter(Boolean))].sort();
+  document.getElementById("branchFilterPanel").innerHTML = multiselectOptionsHtml(options, selectedBranches, "onBranchFilterToggle");
+  updateMultiselectLabel("branchFilterBtn", selectedBranches, "כל הסניפים");
+}
+
+function populateCompanyFilterPanel() {
+  const options = [...new Set(RAW_RECORDS.map(r => r.company).filter(Boolean))].sort();
+  document.getElementById("companyFilterPanel").innerHTML = multiselectOptionsHtml(options, selectedCompanies, "onCompanyFilterToggle");
+  updateMultiselectLabel("companyFilterBtn", selectedCompanies, "כל החברות");
+}
+
+function onBranchFilterToggle(value, checked) {
+  if (checked) selectedBranches.add(value); else selectedBranches.delete(value);
+  updateMultiselectLabel("branchFilterBtn", selectedBranches, "כל הסניפים");
+  applyFiltersAndRender();
+}
+
+function onCompanyFilterToggle(value, checked) {
+  if (checked) selectedCompanies.add(value); else selectedCompanies.delete(value);
+  updateMultiselectLabel("companyFilterBtn", selectedCompanies, "כל החברות");
+  applyFiltersAndRender();
 }
 
 let RAW_RECORDS = [];
@@ -215,9 +296,7 @@ async function loadSupplierNames() {
 }
 
 async function loadRecords() {
-  const branch = document.getElementById("branchFilter").value;
-  const url = branch ? `/api/inventory/list?branch=${encodeURIComponent(branch)}` : "/api/inventory/list";
-  const res = await fetch(url);
+  const res = await fetch("/api/inventory/list");
   if (!res.ok) {
     document.getElementById("cards").innerHTML = "";
     document.getElementById("emptyMsg").style.display = "block";
@@ -227,6 +306,8 @@ async function loadRecords() {
   }
   RAW_RECORDS = await res.json();
   populateSupplierFilter();
+  populateBranchFilterPanel();
+  populateCompanyFilterPanel();
   applyFiltersAndRender();
 }
 
@@ -254,6 +335,8 @@ function applyFiltersAndRender() {
   const invoiceNumberQuery = document.getElementById("invoiceNumberFilter").value.trim();
 
   let records = RAW_RECORDS;
+  if (selectedBranches.size) records = records.filter(r => selectedBranches.has(r.branch));
+  if (selectedCompanies.size) records = records.filter(r => selectedCompanies.has(r.company));
   if (supplier) records = records.filter(r => r.supplier_domain === supplier);
   if (dateFrom) records = records.filter(r => { const d = recordDateStr(r); return d && d >= dateFrom; });
   if (dateTo) records = records.filter(r => { const d = recordDateStr(r); return d && d <= dateTo; });
@@ -363,6 +446,7 @@ function renderCards(records) {
               ${r.invoice_number ? " · מס' חשבונית: " + escapeHtml(r.invoice_number) : items.length
                 ? ` · <span style="color:var(--red);">אין מס' חשבונית</span> <button class="toggle-raw" onclick="event.stopPropagation(); reparseInvoice(${r.id})" id="reparse-${r.id}">🔄 פרש מחדש</button>`
                 : ""}
+              ${r.company ? " · חברה: " + escapeHtml(r.company) : ""}
             </div>
           </div>
         </div>
@@ -379,6 +463,11 @@ function renderCards(records) {
         <select class="branch-picker ${r.branch ? "" : "unset"}" onchange="event.stopPropagation(); setBranch(${r.id}, this.value)">
           <option value="">— לא נבחר —</option>
           ${branchOptions.map(b => `<option value="${escapeHtml(b)}" ${b === r.branch ? "selected" : ""}>${escapeHtml(b)}</option>`).join("")}
+        </select>
+        <label style="font-size:12.5px;color:#5b7186;">חברה:</label>
+        <select class="branch-picker" onchange="event.stopPropagation(); setCompany(${r.id}, this.value)">
+          <option value="">— לא נבחר —</option>
+          ${companyOptions.map(c => `<option value="${escapeHtml(c)}" ${c === r.company ? "selected" : ""}>${escapeHtml(c)}</option>`).join("")}
         </select>
         ${isReview ? `
           <button class="btn small" onclick="markOk(${r.id})">✓ סימנתי כטופל</button>
@@ -577,7 +666,6 @@ async function checkNow() {
   }
   const result = await res.json();
   statusEl.textContent = `נמצאו ${result.created} חדשות (${result.skipped} כבר נבדקו)`;
-  await loadBranches();
   await loadRecords();
 }
 
@@ -653,11 +741,14 @@ function clearFilters() {
   document.getElementById("dateFrom").value = "";
   document.getElementById("dateTo").value = "";
   document.getElementById("invoiceNumberFilter").value = "";
+  selectedBranches.clear();
+  selectedCompanies.clear();
+  populateBranchFilterPanel();
+  populateCompanyFilterPanel();
   applyFiltersAndRender();
 }
 
-loadSupplierNames().then(() => loadBranchOptions().then(loadRecords));
-loadBranches();
+loadSupplierNames().then(() => loadBranchOptions().then(() => loadCompanyOptions().then(loadRecords)));
 loadCatalogStatus();
 </script>
 </body>

@@ -22,6 +22,7 @@ from email.utils import parsedate_to_datetime
 from pypdf import PdfReader
 
 import branches
+import companies
 import gmail_client
 import invoice_store
 import item_matcher
@@ -814,6 +815,7 @@ def process_new_invoices(lookback_days: int = 30) -> dict:
                 "pdf_data": pdf_bytes,
                 "branch": _guess_branch(subject, text),
                 "invoice_number": guess_invoice_number(subject, text, pdf_bytes=pdf_bytes),
+                "company": companies.detect_company(text),
                 "line_items": line_items or None,
                 "status": "needs_review",
             })

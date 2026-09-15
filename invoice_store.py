@@ -51,6 +51,9 @@ def init_db():
             # -layout for hadarrosen, which keeps table columns pypdf's
             # plain extract_text() sometimes garbles or drops).
             cur.execute("ALTER TABLE invoice_records ADD COLUMN IF NOT EXISTS pdf_data BYTEA;")
+            # Which City Wash legal entity (companies.py) the invoice was
+            # billed to -- same auto-detect-then-editable pattern as branch.
+            cur.execute("ALTER TABLE invoice_records ADD COLUMN IF NOT EXISTS company TEXT;")
         conn.commit()
 
 
@@ -67,8 +70,8 @@ def create_record(fields: dict) -> int:
             cur.execute("""
                 INSERT INTO invoice_records
                     (gmail_message_id, supplier_domain, sender_email, subject, received_at,
-                     pdf_filename, raw_text, branch, invoice_number, line_items, status, note, pdf_data)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     pdf_filename, raw_text, branch, invoice_number, line_items, status, note, pdf_data, company)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (gmail_message_id) DO NOTHING
                 RETURNING id
             """, (
@@ -85,6 +88,7 @@ def create_record(fields: dict) -> int:
                 fields.get("status", "needs_review"),
                 fields.get("note"),
                 psycopg2.Binary(fields["pdf_data"]) if fields.get("pdf_data") is not None else None,
+                fields.get("company"),
             ))
             row = cur.fetchone()
         conn.commit()
@@ -97,7 +101,7 @@ def create_record(fields: dict) -> int:
 _RECORD_COLUMNS = (
     "id, gmail_message_id, supplier_domain, sender_email, subject, received_at, "
     "pdf_filename, raw_text, branch, invoice_number, line_items, status, note, "
-    "created_at, updated_at"
+    "created_at, updated_at, company"
 )
 
 
@@ -187,6 +191,16 @@ def update_branch(record_id: int, branch: str):
             cur.execute(
                 "UPDATE invoice_records SET branch=%s, updated_at=now() WHERE id=%s",
                 (branch, record_id),
+            )
+        conn.commit()
+
+
+def update_company(record_id: int, company: str):
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE invoice_records SET company=%s, updated_at=now() WHERE id=%s",
+                (company, record_id),
             )
         conn.commit()
 
