@@ -272,7 +272,7 @@ const inputRow = document.getElementById("inputRow");
 let docType = null;
 let step = 0;
 let data = {};
-let groupFilled = 0; // how many fields of the current "group" step are already answered
+let filledKeys = new Set(); // keys already answered for the current "group" step
 
 function todayStr() {
   const d = new Date();
@@ -350,7 +350,7 @@ async function askDocType() {
     }
     docType = key;
     step = 0;
-    groupFilled = 0;
+    filledKeys = new Set();
     addBubble(label, "user");
     askCurrentStep();
   });
@@ -363,7 +363,7 @@ function currentSteps() {
 async function askCurrentStep() {
   const s = currentSteps()[step];
   if (s.kind === "group") {
-    const remaining = s.fields.slice(groupFilled);
+    const remaining = s.fields.filter(f => !filledKeys.has(f.key));
     const listText = remaining.map((f, i) => `${i+1}. ${f.label}`).join("\n");
     await botSay(listText);
     addHint(`אפשר לשלוח הכל בהודעה אחת (מופרד ב-"${SEP}"), או פריט אחד בכל הודעה — איך שנוח לך.`);
@@ -392,7 +392,7 @@ async function askCurrentStep() {
 
 function advanceStep() {
   step++;
-  groupFilled = 0;
+  filledKeys = new Set();
   if (step < currentSteps().length) {
     askCurrentStep();
   } else {
@@ -419,22 +419,50 @@ function splitGroupAnswer(raw) {
   return raw.split(SEP).map(s => s.trim()).filter(x => x.length > 0);
 }
 
+// Matches the parts of a free-form group answer to the still-unanswered
+// fields. With enough parts to fill every field, match positionally (the
+// order the person typed them in). With fewer parts than fields -- e.g.
+// someone skips a field that feels optional (like "first name for the
+// greeting") and just sends the name and ID number -- route any part
+// that's clearly an ID number to the "*_ID" field wherever it sits in the
+// list, so it lands correctly instead of shifting into the wrong slot and
+// leaving the real ID unanswered.
+function matchGroupParts(remaining, parts) {
+  if (parts.length >= remaining.length) {
+    return remaining.map((f, i) => [f, parts[i]]);
+  }
+
+  const isIdField = f => f.key.endsWith("_ID");
+  const isIdLikeValue = p => /^\d{5,}$/.test(p.replace(/[\s-]/g, ""));
+
+  const idFields = remaining.filter(isIdField);
+  const idParts = parts.filter(isIdLikeValue);
+  if (idFields.length === 0 || idParts.length !== idFields.length) {
+    return remaining.slice(0, parts.length).map((f, i) => [f, parts[i]]);
+  }
+
+  const otherFields = remaining.filter(f => !isIdField(f));
+  const otherParts = parts.filter(p => !isIdLikeValue(p));
+  const assignments = idFields.map((f, i) => [f, idParts[i]]);
+  otherFields.slice(0, otherParts.length).forEach((f, i) => assignments.push([f, otherParts[i]]));
+  return assignments;
+}
+
 async function handleGroupAnswer(rawText) {
   addBubble(rawText, "user");
   const s = currentSteps()[step];
-  const remaining = s.fields.slice(groupFilled);
+  const remaining = s.fields.filter(f => !filledKeys.has(f.key));
   const parts = splitGroupAnswer(rawText);
 
-  const take = Math.min(parts.length, remaining.length);
-  for (let i = 0; i < take; i++) {
-    data[remaining[i].key] = parts[i];
+  for (const [field, value] of matchGroupParts(remaining, parts)) {
+    data[field.key] = value;
+    filledKeys.add(field.key);
   }
-  groupFilled += take;
 
-  if (groupFilled >= s.fields.length) {
+  if (filledKeys.size >= s.fields.length) {
     advanceStep();
   } else {
-    const stillNeeded = s.fields.slice(groupFilled);
+    const stillNeeded = s.fields.filter(f => !filledKeys.has(f.key));
     await botSay("קיבלתי. נשארו עוד:\n" + stillNeeded.map((f, i) => `${i+1}. ${f.label}`).join("\n"));
   }
 }
