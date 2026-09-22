@@ -39,6 +39,8 @@
   .bot { align-self: flex-start; background: #fff; border: 1px solid var(--border); color: var(--text); }
   .user { align-self: flex-end; background: var(--blue); color: #fff; }
   .hint { align-self: flex-start; color: #5b7186; font-size: 13.5px; padding: 0 14px; max-width: 68%; }
+  .hint-link { align-self: flex-start; color: var(--blue); font-size: 13.5px; padding: 0 14px; max-width: 68%; cursor: pointer; text-decoration: underline; }
+  .hint-link:hover { color: var(--blue-dark); }
   .quick-replies { display: flex; gap: 8px; flex-wrap: wrap; align-self: flex-end; justify-content: flex-end; margin: 4px 0; max-width: 90%; }
   .quick-replies button {
     background: #fff; border: 1px solid var(--blue); color: var(--blue-dark); border-radius: 16px;
@@ -273,6 +275,7 @@ let docType = null;
 let step = 0;
 let data = {};
 let filledKeys = new Set(); // keys already answered for the current "group" step
+let pendingEditKey = null; // set while correcting a previously-answered field via free text
 
 function todayStr() {
   const d = new Date();
@@ -388,6 +391,116 @@ async function askCurrentStep() {
     inputRow.style.display = "flex";
     textInput.focus();
   }
+  addEditLink();
+}
+
+// List of every field already answered so far (this doc type's earlier
+// steps, plus any fields already given within the in-progress step), with
+// a human label and display value -- used both for the summary screen and
+// for picking a field to go back and correct mid-flow.
+function editableEntries() {
+  const entries = [];
+  if (data.COMPANY_NAME) entries.push({ key: "COMPANY_NAME", label: "חברה", display: data.COMPANY_NAME });
+  if (!docType) return entries;
+  for (const s of currentSteps()) {
+    const keys = s.kind === "group" ? s.fields.map(f => f.key) : [s.key];
+    for (const key of keys) {
+      if (data[key] === undefined) continue;
+      let display = data[key];
+      if (s.kind === "choice") {
+        const found = s.choices.find(([label, value]) => value === display);
+        display = found ? found[0] : display;
+      }
+      entries.push({ key, label: fieldLabel(key), display });
+    }
+  }
+  return entries;
+}
+
+function findStepForKey(key) {
+  for (const s of currentSteps()) {
+    if (s.kind === "group" ? s.fields.some(f => f.key === key) : s.key === key) return s;
+  }
+  return null;
+}
+
+// A small "fix a previous answer" link shown under every question, so
+// correcting an earlier mistake doesn't require restarting the whole flow.
+function addEditLink() {
+  if (editableEntries().length === 0) return;
+  const div = document.createElement("div");
+  div.className = "hint-link";
+  div.textContent = "✏️ לתקן תשובה קודמת";
+  div.onclick = () => { div.remove(); startEditFlow(); };
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+async function startEditFlow() {
+  const entries = editableEntries();
+  await botSay("איזה פרט לתקן?");
+  inputRow.style.display = "none";
+  const options = entries.map(e => [`${e.label}: ${e.display}`, e.key]);
+  options.push(["↩️ ביטול, להמשיך כרגיל", null]);
+  addQuickReplies(options, (label, key) => {
+    if (key === null) { resumeCurrentStep(); return; }
+    addBubble(label, "user");
+    editField(key);
+  });
+}
+
+async function editField(key) {
+  if (key === "COMPANY_NAME") {
+    await botSay("בחר/י חברה חדשה:");
+    inputRow.style.display = "none";
+    addQuickReplies(COMPANIES.map(c => [c.name, c]), (label, company) => {
+      data.COMPANY_NAME = company.name;
+      data.COMPANY_ID = company.id;
+      addBubble(label, "user");
+      finishEdit();
+    });
+    return;
+  }
+  const s = findStepForKey(key);
+  const label = fieldLabel(key);
+  if (s && s.kind === "choice") {
+    await botSay(`${label} — בחר/י ערך חדש:`);
+    inputRow.style.display = "none";
+    addQuickReplies(s.choices, (label2, value) => {
+      data[key] = value;
+      addBubble(label2, "user");
+      finishEdit();
+    });
+  } else if (s && s.kind === "date") {
+    await botSay(`מה התאריך החדש עבור "${label}"?`);
+    inputRow.style.display = "flex";
+    addQuickReplies([["📅 היום (" + todayStr() + ")", todayStr()]], (label2, value) => {
+      data[key] = value;
+      addBubble(label2, "user");
+      finishEdit();
+    });
+    pendingEditKey = key;
+    textInput.focus();
+  } else {
+    await botSay(`מה הערך החדש עבור "${label}"?`);
+    inputRow.style.display = "flex";
+    pendingEditKey = key;
+    textInput.focus();
+  }
+}
+
+async function finishEdit() {
+  pendingEditKey = null;
+  await botSay("עודכן ✅", 250);
+  resumeCurrentStep();
+}
+
+function resumeCurrentStep() {
+  if (step >= currentSteps().length) {
+    showSummary();
+  } else {
+    askCurrentStep();
+  }
 }
 
 function advanceStep() {
@@ -464,6 +577,7 @@ async function handleGroupAnswer(rawText) {
   } else {
     const stillNeeded = s.fields.filter(f => !filledKeys.has(f.key));
     await botSay("קיבלתי. נשארו עוד:\n" + stillNeeded.map((f, i) => `${i+1}. ${f.label}`).join("\n"));
+    addEditLink();
   }
 }
 
@@ -480,26 +594,17 @@ function fieldLabel(key) {
 }
 
 async function showSummary() {
-  let lines = ["בדוק/י שהפרטים נכונים:", `חברה: ${data.COMPANY_NAME}`];
-  for (const s of currentSteps()) {
-    const keys = s.kind === "group" ? s.fields.map(f => f.key) : [s.key];
-    for (const key of keys) {
-      let val = data[key];
-      if (s.kind === "choice") {
-        const found = s.choices.find(([label, value]) => value === val);
-        val = found ? found[0] : val;
-      }
-      lines.push(`${fieldLabel(key)}: ${val}`);
-    }
-  }
+  const lines = ["בדוק/י שהפרטים נכונים:", ...editableEntries().map(e => `${e.label}: ${e.display}`)];
   if (CONTRACT_TYPES.includes(docType)) {
     lines.push("", "🦺 הצהרת הבטיחות תצורף אוטומטית לאותו PDF.");
   }
   await botSay(lines.join("\n"), 300);
   inputRow.style.display = "none";
-  addQuickReplies([["✅ כן, צור מסמך","yes"],["❌ לא, בטל","no"]], async (label, value) => {
+  addQuickReplies([["✅ כן, צור מסמך","yes"],["✏️ לתקן פרט","edit"],["❌ לא, בטל","no"]], async (label, value) => {
     if (value === "yes") {
       await generateDocument();
+    } else if (value === "edit") {
+      await startEditFlow();
     } else {
       await botSay("בוטל. רענן/י את הדף כדי להתחיל שוב.");
     }
@@ -578,6 +683,13 @@ sendBtn.onclick = () => {
   if (awaitingPhoneNumber) {
     awaitingPhoneNumber = false;
     sendForSmsSignature(val);
+    return;
+  }
+  if (pendingEditKey) {
+    const key = pendingEditKey;
+    data[key] = val;
+    addBubble(val, "user");
+    finishEdit();
     return;
   }
   const s = currentSteps()[step];
