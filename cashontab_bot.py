@@ -607,4 +607,139 @@ def enter_invoice(invoice: dict) -> dict:
         finally:
             browser.close()
 
+
+def _open_select_by_label(page, label_text):
+    """Opens an Ant Design <Select> that sits in the same row as a plain
+    text label (not a placeholder -- "בחר פורמט" has no input of its own,
+    just the select's current value, e.g. "PDF") -- same row-scoping trick
+    as _fill_field_in_row, but clicking the select box open instead of
+    filling an input."""
+    row = page.locator(f':text("{label_text}")').locator(
+        "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' ant-row ')][1]"
+    )
+    try:
+        row.locator(".ant-select").first.click(timeout=_TIMEOUT_MS)
+    except PlaywrightTimeoutError:
+        _fail(page, f'לא נמצא תפריט הבחירה ליד "{label_text}"')
+
+
+def fetch_sales_report(date_from: str, date_to: str) -> dict:
+    """Logs into Cash On Tab and pulls its "מכירות לתקופה" (sales for a
+    period) report for [date_from, date_to] (each "YYYY-MM-DD").
+
+    FIRST DRAFT, same caveat as enter_invoice: written from one screenshot
+    of the report screen (Kateryna 2026-09-23), never run end-to-end. The
+    one genuinely unverifiable step is the opening navigation click below
+    (which right-rail menuitem opens this report area at all) -- everything
+    after that is anchored on Hebrew text actually visible in the
+    screenshot (מתאריך/עד תאריך field placeholders, "בחר פורמט", "הפק דוח").
+    Expect this to need a live debugging pass same as enter_invoice did,
+    diagnosed from whatever CashOnTabError + screenshot comes back.
+
+    Deliberately does NOT try to parse the report into structured rows yet
+    -- we don't know its real column layout (product/qty/revenue/branch?)
+    until a live run actually gets one back. Returns the raw result instead:
+    {"status": "downloaded", "filename", "content_type", "content_b64"} if
+    "הפק דוח" triggered a file download (tried first, since a downloaded
+    Excel/PDF is far easier to parse reliably than scraping a rendered
+    table), or {"status": "rendered_inline", "html"} if it showed the
+    report in the page instead -- either way, enough to actually look at
+    and design the real parser from, the same "built from a real sample"
+    approach used for supplier invoices (see invoice_ingest.py's docstring).
+    """
+    company, username, password = _get_credentials()
+
+    def _ddmmyyyy(iso_date: str) -> str:
+        y, m, d = iso_date.split("-")
+        return f"{d}/{m}/{y}"
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+        page = browser.new_page(viewport={"width": 1920, "height": 1080})
+        try:
+            _login(page, company, username, password)
+
+            # GUESS -- the report screenshot shows a tab bar ("מכירות
+            # לתקופה", "מכירות - רווח", "ניתוח מכירות תקופתי", ...) that
+            # looks like its own reports section, distinct from "מסמכים"
+            # (used by enter_invoice). "דוחות" is the natural Hebrew label
+            # for that section but wasn't confirmed against the live menu --
+            # this is the step most likely to need fixing after a real run.
+            try:
+                page.get_by_role("menuitem", name="דוחות").click(timeout=_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                _fail(page, 'לא נמצא פריט התפריט "דוחות" (הניווט למסך הדוחות) -- '
+                      "צריך לבדוק דרך אילו תפריט/אייקון מגיעים למסך \"מכירות לתקופה\"")
+
+            try:
+                page.get_by_role("tab", name="מכירות - לתקופה").click(timeout=_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                # Screenshot shows this tab already active/selected on
+                # arrival, so a failed click here (rather than a failed
+                # find) may just mean it's already the active tab -- only
+                # hard-fail if the tab isn't even on the page.
+                if page.get_by_text("מכירות - לתקופה").count() == 0:
+                    _fail(page, 'לא נמצאה לשונית "מכירות - לתקופה" במסך הדוחות')
+
+            try:
+                page.get_by_placeholder("התחלה").fill(_ddmmyyyy(date_from), timeout=_TIMEOUT_MS)
+                page.get_by_placeholder("סיום").fill(_ddmmyyyy(date_to), timeout=_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                _fail(page, "לא הצלחתי למלא את טווח התאריכים (מתאריך/עד תאריך)")
+
+            # Best-effort: prefer Excel over the default PDF if the format
+            # dropdown offers it -- structured rows are far easier to parse
+            # reliably than a PDF. Never hard-fails: if Excel isn't found
+            # (or the dropdown itself isn't there), just proceeds with
+            # whatever format is already selected and says so in the result.
+            format_used = "unknown"
+            try:
+                _open_select_by_label(page, "בחר פורמט")
+                excel_option = page.get_by_text(re.compile("Excel|אקסל|XLSX", re.IGNORECASE))
+                if excel_option.count() > 0:
+                    excel_option.first.click(timeout=3000)
+                    format_used = "excel"
+                else:
+                    page.keyboard.press("Escape")
+                    format_used = "pdf (ברירת מחדל -- לא נמצאה אופציית Excel בתפריט)"
+            except Exception:  # noqa: BLE001
+                format_used = "pdf (ברירת מחדל -- לא הצלחתי לפתוח את תפריט הפורמט)"
+
+            try:
+                generate_btn = page.get_by_role("button", name="הפק דוח")
+                try:
+                    with page.expect_download(timeout=12000) as download_info:
+                        generate_btn.click(timeout=_TIMEOUT_MS)
+                    download = download_info.value
+                    path = download.path()
+                    with open(path, "rb") as f:
+                        content = f.read()
+                    return {
+                        "status": "downloaded",
+                        "format_used": format_used,
+                        "filename": download.suggested_filename,
+                        "content_b64": base64.b64encode(content).decode("ascii"),
+                    }
+                except PlaywrightTimeoutError:
+                    # No download fired -- the report likely rendered
+                    # in-page instead. Grab whatever showed up so it can be
+                    # inspected, rather than treating this as a hard error.
+                    page.wait_for_timeout(1500)
+                    report_area = page.locator(".ant-table, table").first
+                    if report_area.count() == 0:
+                        _fail(page, 'לחצתי "הפק דוח" -- לא הורד קובץ ולא הופיע דוח/טבלה על המסך')
+                    return {
+                        "status": "rendered_inline",
+                        "format_used": format_used,
+                        "html": report_area.evaluate("el => el.outerHTML"),
+                    }
+            except PlaywrightTimeoutError:
+                _fail(page, 'לא נמצא כפתור "הפק דוח"')
+        except CashOnTabError:
+            raise
+        except PlaywrightTimeoutError as e:
+            _fail(page, f"שלב לא צפוי בתהליך: {e}")
+        finally:
+            browser.close()
+
     return {"status": "created"}

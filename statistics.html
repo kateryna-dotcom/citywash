@@ -109,6 +109,12 @@
   .breakdown-value { font-size: 12.5px; font-weight: 600; color: var(--blue-dark); width: 100px; text-align: left; flex-shrink: 0; }
 
   .breakdowns-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+  .match-err { color: var(--red); font-size: 13px; }
+  .report-raw {
+    background: #f8fafc; border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px; font-size: 12px; white-space: pre-wrap; max-height: 320px;
+    overflow-y: auto; direction: ltr; text-align: left; font-family: monospace;
+  }
 </style>
 </head>
 <body>
@@ -161,6 +167,26 @@
       <h3>קניות לפי חברה</h3>
       <div id="companyBreakdown"></div>
     </div>
+  </div>
+
+  <!-- Experimental first step toward מכירות/רווחיות/המלצות הזמנה (Kateryna
+       2026-09-23): a manual trigger for cashontab_bot.fetch_sales_report,
+       which drives Cash On Tab's own "מכירות לתקופה" report screen the same
+       way invoice entry is already automated. First draft, not yet run
+       end-to-end -- expect this to fail the first few times and need a
+       selector fix per failure, same as auto-enter did when it was new. -->
+  <div class="card" style="border-style:dashed;">
+    <h3>🧪 ניסיוני: משיכת דוח מכירות מ-Cash On Tab</h3>
+    <p class="status-msg" style="margin:0 0 10px;">
+      שלב ראשון לקראת נתוני מכירות/רווחיות/המלצות הזמנה -- עדיין לא רץ בהצלחה על המערכת האמיתית,
+      כל ניסיון עוזר לתקן את הצעד הבא. לא קורה כלום אוטומטית -- רק בלחיצה כאן.
+    </p>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <label class="status-msg">מתאריך: <input type="date" id="salesReportFrom"></label>
+      <label class="status-msg">עד תאריך: <input type="date" id="salesReportTo"></label>
+      <button class="btn small" onclick="fetchSalesReport(this)">משוך דוח</button>
+    </div>
+    <div id="salesReportResult" style="margin-top:10px;"></div>
   </div>
 
   <div class="tooltip" id="tooltip"></div>
@@ -400,6 +426,63 @@ function renderBreakdown(elId, entries) {
       </div>`;
   }).join("");
   attachBarTooltips(el);
+}
+
+async function fetchSalesReport(btnEl) {
+  const dateFrom = document.getElementById("salesReportFrom").value;
+  const dateTo = document.getElementById("salesReportTo").value;
+  const resultEl = document.getElementById("salesReportResult");
+  if (!dateFrom || !dateTo) { resultEl.innerHTML = '<div class="match-err">בחרי טווח תאריכים קודם</div>'; return; }
+  resultEl.innerHTML = "";
+  btnEl.disabled = true;
+  const originalText = btnEl.textContent;
+  btnEl.textContent = "מושך מ-Cash On Tab...";
+  try {
+    const res = await fetch("/api/inventory/fetch-sales-report", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date_from: dateFrom, date_to: dateTo }),
+    });
+    let data, screenshot = null, errMsg = null;
+    if ((res.headers.get("content-type") || "").includes("application/json")) {
+      data = await res.json();
+      if (!res.ok) { errMsg = data.error || JSON.stringify(data); screenshot = data.screenshot_b64; }
+    } else if (!res.ok) {
+      errMsg = await res.text();
+    }
+    if (errMsg) {
+      resultEl.innerHTML = `<div class="match-err">שגיאה: ${escapeHtml(errMsg)}</div>` +
+        (screenshot ? `<img src="data:image/png;base64,${screenshot}" alt="מסך Cash On Tab בזמן השגיאה"
+           style="max-width:100%;border:1px solid var(--border);border-radius:6px;margin-top:6px;">` : "");
+      return;
+    }
+    if (data.status === "downloaded") {
+      const a = document.createElement("a");
+      a.href = "data:application/octet-stream;base64," + data.content_b64;
+      a.download = data.filename || "sales-report";
+      a.textContent = "⬇️ הורד/י את הקובץ שהתקבל: " + data.filename;
+      a.className = "btn small";
+      resultEl.textContent = "";
+      resultEl.appendChild(a);
+      const note = document.createElement("div");
+      note.className = "status-msg";
+      note.style.marginTop = "6px";
+      note.textContent = "פורמט: " + (data.format_used || "?") + " -- שלחי לי את הקובץ הזה כדי שאבנה את הפירוק לפי מוצר/רווחיות.";
+      resultEl.appendChild(note);
+    } else if (data.status === "rendered_inline") {
+      resultEl.innerHTML = '<div class="status-msg" style="margin-bottom:6px;">הדוח הוצג בתוך העמוד (לא כקובץ) -- זה מה שהתקבל:</div>';
+      const pre = document.createElement("div");
+      pre.className = "report-raw";
+      pre.textContent = data.html || "";
+      resultEl.appendChild(pre);
+    } else {
+      resultEl.textContent = JSON.stringify(data);
+    }
+  } catch (e) {
+    resultEl.innerHTML = `<div class="match-err">שגיאת רשת: ${escapeHtml(String(e))}</div>`;
+  } finally {
+    btnEl.disabled = false;
+    btnEl.textContent = originalText;
+  }
 }
 
 async function loadSupplierNames() {
