@@ -150,6 +150,22 @@ def list_records(branch: str = None, limit: int = 200) -> list:
             return [dict(r) for r in cur.fetchall()]
 
 
+def list_ok_records_for_stats() -> list:
+    """Lightweight rows (no raw_text/pdf_data/sender_email -- just what the
+    סטטיסטיקה tab's client-side spend aggregation needs) for every invoice
+    she's actually marked as handled (status='ok'). Deliberately unlimited,
+    unlike list_records()'s 200-row page cap, since a real "over time" trend
+    needs the full history, not just the most recent page."""
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, branch, supplier_domain, company, received_at, line_items
+                FROM invoice_records WHERE status='ok'
+                ORDER BY received_at
+            """)
+            return [dict(r) for r in cur.fetchall()]
+
+
 def list_branches() -> list:
     with _get_conn() as conn:
         with conn.cursor() as cur:

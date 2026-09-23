@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>סטטיסטיקה</title>
+<style>
+  :root {
+    --blue-dark: #0b4f8a; --blue: #1e6fb8; --blue-light: #eaf3fb;
+    --border: #d9e6f0; --text: #1c2b39; --muted: #5b7186; --red: #d92b2b;
+    --green: #1a8a4a; --green-light: #eaf9f0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
+    background: #f4f8fb; color: var(--text); padding: 22px;
+  }
+  .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; flex-wrap: wrap; gap: 12px; }
+  .top h2 { margin: 0; color: var(--blue-dark); font-size: 19px; }
+
+  /* filter row -- one row above the charts, same controls/pattern as מלАי */
+  .filters {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    background: #fff; border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px; margin-bottom: 18px;
+  }
+  select {
+    padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
+    font-size: 14px; font-family: inherit; background: #fff;
+  }
+  input[type=date] {
+    padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;
+    font-size: 14px; font-family: inherit;
+  }
+  .btn {
+    background: var(--blue); color: #fff; border: none; border-radius: 8px; padding: 9px 16px;
+    font-size: 14px; cursor: pointer; font-weight: 600;
+  }
+  .btn:hover { background: var(--blue-dark); }
+  .btn.secondary { background: #fff; color: var(--blue); border: 1px solid var(--blue); }
+  .btn.small { padding: 6px 12px; font-size: 13px; }
+  .status-msg { font-size: 13px; color: var(--muted); }
+  .multiselect { position: relative; display: inline-block; }
+  .multiselect-btn {
+    padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
+    font-size: 14px; font-family: inherit; background: #fff; color: var(--text); cursor: pointer;
+  }
+  .multiselect-panel {
+    display: none; position: absolute; top: 100%; right: 0; z-index: 20;
+    background: #fff; border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px; margin-top: 4px; min-width: 200px; max-height: 280px; overflow-y: auto;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.1);
+  }
+  .multiselect-panel.open { display: block; }
+  .multiselect-option {
+    display: flex; align-items: center; gap: 6px; padding: 5px 6px;
+    font-size: 13.5px; cursor: pointer; border-radius: 5px; white-space: nowrap;
+  }
+  .multiselect-option:hover { background: var(--blue-light); }
+
+  /* KPI stat tiles */
+  .tiles { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 20px; }
+  .tile {
+    background: #fff; border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 18px; min-width: 190px; flex: 1;
+  }
+  .tile .label { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  .tile .value { font-size: 26px; font-weight: 700; color: var(--blue-dark); }
+  .tile .value small { font-size: 14px; font-weight: 600; color: var(--muted); }
+
+  /* charts */
+  .card {
+    background: #fff; border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 18px; margin-bottom: 18px;
+  }
+  .card h3 { margin: 0 0 14px; font-size: 15px; color: var(--blue-dark); }
+  .empty { text-align: center; color: var(--muted); padding: 40px 20px; }
+
+  /* monthly trend -- vertical bars, single hue (one series = no legend needed) */
+  .trend-chart { display: flex; align-items: flex-end; gap: 4px; height: 180px; padding-inline-end: 4px; }
+  .trend-col { flex: 1; display: flex; flex-direction: column; align-items: center; min-width: 0; }
+  .trend-bar-wrap { width: 100%; height: 150px; display: flex; align-items: flex-end; justify-content: center; }
+  .trend-bar {
+    width: min(24px, 70%); background: var(--blue); border-radius: 4px 4px 0 0;
+    min-height: 2px; cursor: pointer; transition: background .1s;
+    position: relative;
+  }
+  .trend-bar:hover { background: var(--blue-dark); }
+  .trend-label { font-size: 10.5px; color: var(--muted); margin-top: 6px; white-space: nowrap; }
+  .tooltip {
+    position: fixed; background: var(--text); color: #fff; font-size: 12.5px;
+    padding: 6px 10px; border-radius: 6px; pointer-events: none; z-index: 100;
+    display: none; white-space: nowrap; line-height: 1.5;
+  }
+  .tooltip strong { font-size: 13.5px; }
+
+  /* ranked horizontal bar breakdowns */
+  .breakdown-row { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
+  .breakdown-label {
+    width: 150px; flex-shrink: 0; font-size: 13px; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .breakdown-track { flex: 1; background: var(--blue-light); border-radius: 4px; height: 22px; position: relative; }
+  .breakdown-fill {
+    background: var(--blue); border-radius: 4px; height: 100%; min-width: 4px;
+    display: flex; align-items: center; cursor: pointer; transition: background .1s;
+  }
+  .breakdown-fill:hover { background: var(--blue-dark); }
+  .breakdown-value { font-size: 12.5px; font-weight: 600; color: var(--blue-dark); width: 100px; text-align: left; flex-shrink: 0; }
+
+  .breakdowns-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <h2>📊 סטטיסטיקה — קניות ממлАי</h2>
+    <div>
+      <button class="btn small" id="vatBtnExcl" onclick="setVatMode('excl')">ללא מע"מ</button>
+      <button class="btn small secondary" id="vatBtnIncl" onclick="setVatMode('incl')">כולל מע"מ</button>
+    </div>
+  </div>
+
+  <div class="filters">
+    <div class="multiselect">
+      <button type="button" class="multiselect-btn" id="branchFilterBtn" onclick="event.stopPropagation(); toggleMultiselectPanel('branchFilterPanel')">כל הסניפים ▾</button>
+      <div class="multiselect-panel" id="branchFilterPanel"></div>
+    </div>
+    <div class="multiselect">
+      <button type="button" class="multiselect-btn" id="companyFilterBtn" onclick="event.stopPropagation(); toggleMultiselectPanel('companyFilterPanel')">כל החברות ▾</button>
+      <div class="multiselect-panel" id="companyFilterPanel"></div>
+    </div>
+    <select id="supplierFilter" onchange="applyFiltersAndRender()">
+      <option value="">כל הספקים</option>
+    </select>
+    <label class="status-msg">מתאריך:
+      <input type="date" id="dateFrom" onchange="applyFiltersAndRender()">
+    </label>
+    <label class="status-msg">עד תאריך:
+      <input type="date" id="dateTo" onchange="applyFiltersAndRender()">
+    </label>
+    <button class="btn secondary" onclick="clearFilters()">נקה סינון</button>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="card">
+    <h3>קניות לפי חודש</h3>
+    <div id="trendChart"></div>
+  </div>
+
+  <div class="breakdowns-grid">
+    <div class="card">
+      <h3>קניות לפי סניף</h3>
+      <div id="branchBreakdown"></div>
+    </div>
+    <div class="card">
+      <h3>קניות לפי ספק</h3>
+      <div id="supplierBreakdown"></div>
+    </div>
+    <div class="card">
+      <h3>קניות לפי חברה</h3>
+      <div id="companyBreakdown"></div>
+    </div>
+  </div>
+
+  <div class="tooltip" id="tooltip"></div>
+
+<script>
+// Same flat 18% VAT convention as /inventory (Kateryna confirmed against
+// real invoice data 2026-09-14) -- line_items totals are stored ללא מע"מ,
+// this just scales for display.
+const VAT_RATE = 0.18;
+let vatMode = "excl"; // "excl" | "incl"
+
+function vatAdjust(amount) {
+  return vatMode === "incl" ? amount * (1 + VAT_RATE) : amount;
+}
+
+function fmtCurrency(amount) {
+  return vatAdjust(amount).toLocaleString("he-IL", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+
+function setVatMode(mode) {
+  vatMode = mode;
+  document.getElementById("vatBtnExcl").className = "btn small" + (mode === "excl" ? "" : " secondary");
+  document.getElementById("vatBtnIncl").className = "btn small" + (mode === "incl" ? "" : " secondary");
+  render();
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+let RAW_RECORDS = [];
+let SUPPLIER_NAMES = {};
+let selectedBranches = new Set();
+let selectedCompanies = new Set();
+
+function toggleMultiselectPanel(panelId) {
+  document.querySelectorAll(".multiselect-panel").forEach(p => { if (p.id !== panelId) p.classList.remove("open"); });
+  document.getElementById(panelId).classList.toggle("open");
+}
+document.addEventListener("click", e => {
+  if (!e.target.closest(".multiselect")) {
+    document.querySelectorAll(".multiselect-panel").forEach(p => p.classList.remove("open"));
+  }
+});
+
+function multiselectOptionsHtml(options, selectedSet, onChangeFn) {
+  return options.map(opt => `
+    <label class="multiselect-option">
+      <input type="checkbox" value="${escapeHtml(opt)}" ${selectedSet.has(opt) ? "checked" : ""} onchange="${onChangeFn}(this.value, this.checked)">
+      ${escapeHtml(opt)}
+    </label>
+  `).join("") || `<div style="padding:6px;color:#5b7186;font-size:12.5px;">אין נתונים</div>`;
+}
+
+function updateMultiselectLabel(btnId, selectedSet, allLabel) {
+  document.getElementById(btnId).textContent = (selectedSet.size ? `${selectedSet.size} נבחרו` : allLabel) + " ▾";
+}
+
+function populateBranchFilterPanel() {
+  const options = [...new Set(RAW_RECORDS.map(r => r.branch).filter(Boolean))].sort();
+  document.getElementById("branchFilterPanel").innerHTML = multiselectOptionsHtml(options, selectedBranches, "onBranchFilterToggle");
+  updateMultiselectLabel("branchFilterBtn", selectedBranches, "כל הסניפים");
+}
+
+function populateCompanyFilterPanel() {
+  const options = [...new Set(RAW_RECORDS.map(r => r.company).filter(Boolean))].sort();
+  document.getElementById("companyFilterPanel").innerHTML = multiselectOptionsHtml(options, selectedCompanies, "onCompanyFilterToggle");
+  updateMultiselectLabel("companyFilterBtn", selectedCompanies, "כל החברות");
+}
+
+function onBranchFilterToggle(value, checked) {
+  if (checked) selectedBranches.add(value); else selectedBranches.delete(value);
+  updateMultiselectLabel("branchFilterBtn", selectedBranches, "כל הסניפים");
+  applyFiltersAndRender();
+}
+
+function onCompanyFilterToggle(value, checked) {
+  if (checked) selectedCompanies.add(value); else selectedCompanies.delete(value);
+  updateMultiselectLabel("companyFilterBtn", selectedCompanies, "כל החברות");
+  applyFiltersAndRender();
+}
+
+function populateSupplierFilter() {
+  const sel = document.getElementById("supplierFilter");
+  const current = sel.value;
+  const domains = [...new Set(RAW_RECORDS.map(r => r.supplier_domain).filter(Boolean))].sort();
+  sel.innerHTML = '<option value="">כל הספקים</option>' +
+    domains.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(SUPPLIER_NAMES[d] || d)}</option>`).join("");
+  sel.value = current;
+}
+
+function recordDateStr(r) {
+  if (!r.received_at) return null;
+  const d = new Date(r.received_at);
+  const pad = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function invoiceItemsTotal(r) {
+  let total = 0;
+  (r.line_items || []).forEach(it => { total += Number(it.total) || 0; });
+  return total;
+}
+
+let FILTERED = [];
+
+function applyFiltersAndRender() {
+  const supplier = document.getElementById("supplierFilter").value;
+  const dateFrom = document.getElementById("dateFrom").value;
+  const dateTo = document.getElementById("dateTo").value;
+
+  let records = RAW_RECORDS;
+  if (selectedBranches.size) records = records.filter(r => selectedBranches.has(r.branch));
+  if (selectedCompanies.size) records = records.filter(r => selectedCompanies.has(r.company));
+  if (supplier) records = records.filter(r => r.supplier_domain === supplier);
+  if (dateFrom) records = records.filter(r => { const d = recordDateStr(r); return d && d >= dateFrom; });
+  if (dateTo) records = records.filter(r => { const d = recordDateStr(r); return d && d <= dateTo; });
+
+  FILTERED = records;
+  render();
+}
+
+function clearFilters() {
+  document.getElementById("supplierFilter").value = "";
+  document.getElementById("dateFrom").value = "";
+  document.getElementById("dateTo").value = "";
+  selectedBranches.clear();
+  selectedCompanies.clear();
+  populateBranchFilterPanel();
+  populateCompanyFilterPanel();
+  applyFiltersAndRender();
+}
+
+// Tooltip content is built with textContent/createElement, never innerHTML
+// string concatenation -- branch/supplier/company names are real-world
+// free text (e.g. companies.py's legal-entity names contain literal
+// double-quote characters, "...בע\"מ") and must never be interpolated into
+// an HTML/attribute string.
+function showTooltip(evt, valueText, labelText) {
+  const tip = document.getElementById("tooltip");
+  tip.textContent = "";
+  const strong = document.createElement("strong");
+  strong.textContent = valueText;
+  tip.appendChild(strong);
+  if (labelText) {
+    tip.appendChild(document.createElement("br"));
+    tip.appendChild(document.createTextNode(labelText));
+  }
+  tip.style.display = "block";
+  tip.style.left = (evt.clientX + 14) + "px";
+  tip.style.top = (evt.clientY + 14) + "px";
+}
+function hideTooltip() {
+  document.getElementById("tooltip").style.display = "none";
+}
+
+// Per-bar listeners reading the value/label back out of data-* attributes
+// (rather than inline onmousemove="") -- keeps every bar's real name out of
+// any HTML attribute or JS-string interpolation entirely.
+function attachBarTooltips(container) {
+  container.querySelectorAll("[data-value]").forEach(bar => {
+    bar.addEventListener("mousemove", e => showTooltip(e, "₪" + fmtCurrency(Number(bar.dataset.value)), bar.dataset.label || ""));
+    bar.addEventListener("mouseleave", hideTooltip);
+  });
+}
+
+function render() {
+  renderTiles();
+  renderTrend();
+  renderBreakdown("branchBreakdown", groupBy(FILTERED, r => r.branch || "— ללא סניף —"));
+  renderBreakdown("supplierBreakdown", groupBy(FILTERED, r => SUPPLIER_NAMES[r.supplier_domain] || r.supplier_domain || "— ללא ספק —"));
+  renderBreakdown("companyBreakdown", groupBy(FILTERED, r => r.company || "— ללא חברה —"));
+}
+
+function renderTiles() {
+  const total = FILTERED.reduce((sum, r) => sum + invoiceItemsTotal(r), 0);
+  const months = new Set(FILTERED.map(r => (r.received_at || "").slice(0, 7)).filter(Boolean));
+  const avgPerMonth = months.size ? total / months.size : 0;
+  document.getElementById("tiles").innerHTML = `
+    <div class="tile"><div class="label">סה"כ קניות (בסינון הנוכחי)</div><div class="value">₪${fmtCurrency(total)}</div></div>
+    <div class="tile"><div class="label">מס' חשבוניות</div><div class="value">${FILTERED.length}</div></div>
+    <div class="tile"><div class="label">ממוצע לחודש</div><div class="value">₪${fmtCurrency(avgPerMonth)}</div></div>
+  `;
+}
+
+function groupBy(records, keyFn) {
+  const map = new Map();
+  records.forEach(r => {
+    const key = keyFn(r);
+    map.set(key, (map.get(key) || 0) + invoiceItemsTotal(r));
+  });
+  return [...map.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+function renderTrend() {
+  const el = document.getElementById("trendChart");
+  const byMonth = new Map();
+  FILTERED.forEach(r => {
+    const month = (r.received_at || "").slice(0, 7);
+    if (!month) return;
+    byMonth.set(month, (byMonth.get(month) || 0) + invoiceItemsTotal(r));
+  });
+  const months = [...byMonth.keys()].sort();
+  if (!months.length) { el.innerHTML = '<div class="empty">אין נתונים להצגה</div>'; return; }
+
+  const max = Math.max(...months.map(m => byMonth.get(m)));
+  const heShortMonth = { "01":"ינו","02":"פבר","03":"מרץ","04":"אפר","05":"מאי","06":"יונ","07":"יול","08":"אוג","09":"ספט","10":"אוק","11":"נוב","12":"דצמ" };
+  el.innerHTML = `<div class="trend-chart">${months.map(m => {
+    const val = byMonth.get(m);
+    const heightPct = max > 0 ? Math.max((val / max) * 100, 1.5) : 1.5;
+    const [y, mo] = m.split("-");
+    const label = `${heShortMonth[mo] || mo} ${y.slice(2)}`;
+    return `
+      <div class="trend-col">
+        <div class="trend-bar-wrap">
+          <div class="trend-bar" style="height:${heightPct}%" data-value="${val}" data-label="${escapeHtml(label)}"></div>
+        </div>
+        <div class="trend-label">${escapeHtml(label)}</div>
+      </div>`;
+  }).join("")}</div>`;
+  attachBarTooltips(el);
+}
+
+function renderBreakdown(elId, entries) {
+  const el = document.getElementById(elId);
+  if (!entries.length) { el.innerHTML = '<div class="empty">אין נתונים</div>'; return; }
+  const max = entries[0][1];
+  el.innerHTML = entries.map(([label, val]) => {
+    const pct = max > 0 ? Math.max((val / max) * 100, 2) : 2;
+    return `
+      <div class="breakdown-row">
+        <div class="breakdown-label" title="${escapeHtml(label)}">${escapeHtml(label)}</div>
+        <div class="breakdown-track">
+          <div class="breakdown-fill" style="width:${pct}%" data-value="${val}"></div>
+        </div>
+        <div class="breakdown-value">₪${fmtCurrency(val)}</div>
+      </div>`;
+  }).join("");
+  attachBarTooltips(el);
+}
+
+async function loadSupplierNames() {
+  const res = await fetch("/api/inventory/supplier-names");
+  if (res.ok) SUPPLIER_NAMES = await res.json();
+}
+
+async function loadStats() {
+  const res = await fetch("/api/inventory/stats");
+  if (!res.ok) {
+    document.getElementById("tiles").innerHTML = "";
+    document.getElementById("trendChart").innerHTML = '<div class="empty">שגיאה בטעינה: ' + escapeHtml(await res.text()) + '</div>';
+    return;
+  }
+  RAW_RECORDS = await res.json();
+  populateSupplierFilter();
+  populateBranchFilterPanel();
+  populateCompanyFilterPanel();
+  applyFiltersAndRender();
+}
+
+(async function init() {
+  await loadSupplierNames();
+  await loadStats();
+})();
+</script>
+</body>
+</html>
