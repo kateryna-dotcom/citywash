@@ -323,6 +323,22 @@ def _fill_line_item(page, item):
         row.locator(".anticon-search").first.click(timeout=2000)
     except PlaywrightTimeoutError:
         pass
+    # That click can open a full "בחירת פריט" (item picker) modal instead of
+    # just re-confirming the in-row lookup -- live run 2026-09-23: Enter had
+    # already resolved the item correctly (קוד 1080067 is a real, unique
+    # item), but the search-icon click on top of that opened this modal
+    # with an unrelated, garbage search value that matched nothing, which
+    # then sat there blocking the row's own "שמור" button (the exact next
+    # failure seen: "לא נמצא כפתור שמור"). Best-effort close via Escape --
+    # if the modal never opened this is a harmless no-op, matching every
+    # other best-effort step in this function.
+    try:
+        picker_title = page.locator(':text-is("בחירת פריט")').first
+        picker_title.wait_for(state="visible", timeout=1500)
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(300)
+    except PlaywrightTimeoutError:
+        pass
     page.wait_for_timeout(1000)
 
     # כמות has no real <label> (same issue as מספר תעודת ספק earlier) --
