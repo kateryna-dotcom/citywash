@@ -821,6 +821,34 @@ def inventory_auto_enter(record_id: int, request: Request):
     return {"status": "created"}
 
 
+@app.post("/api/inventory/fetch-sales-report")
+async def inventory_fetch_sales_report(request: Request):
+    """Experimental, manually-triggered first step toward real sales/
+    profitability/reorder stats (Kateryna 2026-09-23): drives Cash On Tab's
+    own "מכירות לתקופה" report the same way cashontab_bot.py already drives
+    invoice entry -- no manual export needed. First draft, expect a live
+    debugging pass same as enter_invoice needed; on failure the error +
+    screenshot come back as-is (same shape as /api/inventory/auto-enter) so
+    the next selector fix can be made from what it actually shows."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    payload = await request.json()
+    date_from = payload.get("date_from")
+    date_to = payload.get("date_to")
+    if not date_from or not date_to:
+        return Response("date_from and date_to are required (YYYY-MM-DD)", status_code=400)
+    try:
+        return cashontab_bot.fetch_sales_report(date_from, date_to)
+    except cashontab_bot.CashOnTabError as e:
+        return JSONResponse(
+            {"error": str(e), "screenshot_b64": e.screenshot_b64},
+            status_code=502,
+        )
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Unexpected error fetching sales report: {e}", status_code=500)
+
+
 @app.get("/api/inventory/branches")
 def inventory_branches(request: Request):
     unauthorized = _require_api_auth(request)
