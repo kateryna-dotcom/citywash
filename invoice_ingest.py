@@ -52,6 +52,19 @@ _TRANSACTION_NUMBER_RE = re.compile(r"עסקה\s*[:\-]?\s*(\d+)")
 
 _HEBREW_CHAR_RE = re.compile(r"[֐-׿]")
 
+# moshaev-inv.com's finance mailbox (Simona) sends more than invoices from
+# the same domain+attachment pattern the Gmail query matches on -- also
+# bank-transfer receipts, ledger/card statements (כרטסת), and aged-debtors
+# reports (גיול חובות). None of these are purchase invoices, so their line
+# items never resolve and they just sit in מלАי as "needs review" clutter
+# with nothing to actually review. Skip them by subject before ever
+# downloading/parsing the PDF (Kateryna 2026-09-23: "לא רלוונטי").
+_NON_INVOICE_SUBJECT_RE = re.compile(r"העברה\s*(לבנק|בנקאית)|כרטסת|גיול\s*חוב")
+
+
+def _is_non_invoice_subject(subject: str) -> bool:
+    return bool(_NON_INVOICE_SUBJECT_RE.search(subject or ""))
+
 
 def _num(s):
     try:
@@ -776,6 +789,26 @@ def process_new_invoices(lookback_days: int = 30) -> dict:
                 received_at = None
 
             supplier_domain = gmail_client.supplier_domain_for(sender)
+
+            if _is_non_invoice_subject(subject):
+                # Recorded (not just skipped) so it's never re-fetched on a
+                # future run -- same "track it so it doesn't get re-scanned"
+                # reasoning as the no_pdf_found branch below, but excluded
+                # from the מלАי list by default (see invoice_store.list_records).
+                invoice_store.create_record({
+                    "gmail_message_id": message_id,
+                    "supplier_domain": supplier_domain,
+                    "sender_email": sender,
+                    "subject": subject,
+                    "received_at": received_at,
+                    "pdf_filename": None,
+                    "raw_text": "",
+                    "line_items": None,
+                    "status": "irrelevant",
+                })
+                created += 1
+                continue
+
             pdf_attachments = gmail_client.find_pdf_attachments(message)
 
             if not pdf_attachments:
