@@ -53,7 +53,7 @@ import cashontab_bot
 
 # doc_type keys that support the "send for SMS signature" option -- each of
 # these templates has an invisible marker (§) placed at the signature spot.
-SMS_SIGNABLE_DOC_TYPES = {"contract_manager", "contract_worker", "termination", "hearing", "confirmation"}
+SMS_SIGNABLE_DOC_TYPES = {"contract_manager", "contract_worker", "hearing", "confirmation"}
 
 app = FastAPI()
 app.add_middleware(
