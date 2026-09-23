@@ -70,6 +70,7 @@
     <div class="nav-item" data-pane="salary"><span class="emoji">💰</span><span>שכר</span></div>
     <div class="nav-item" data-pane="pension"><span class="emoji">🏦</span><span>פנסיה</span></div>
     <div class="nav-item" data-pane="inventory"><span class="emoji">📦</span><span>מלאי</span></div>
+    <div class="nav-item" data-pane="statistics"><span class="emoji">📊</span><span>סטטיסטיקה</span></div>
     <div class="nav-item" data-pane="mappings"><span class="emoji">🔗</span><span>התאמות מוצרים</span></div>
     <div class="sidebar-footer">Express City Wash<br><a href="/logout">התנתקות</a></div>
   </div>
@@ -89,12 +90,13 @@
       </div>
       <div class="pane" id="pane-pension"><iframe src="/pension" title="pension"></iframe></div>
       <div class="pane" id="pane-inventory"><iframe src="/inventory" title="inventory"></iframe></div>
+      <div class="pane" id="pane-statistics"><iframe src="/statistics" title="statistics"></iframe></div>
       <div class="pane" id="pane-mappings"><iframe src="/mappings" title="mappings"></iframe></div>
     </div>
   </div>
 </div>
 <script>
-const titles = { documents: "בירוקרטיה סיטי וואש", salary: "שכר", pension: "פנסיה", inventory: "מלאי", mappings: "התאמות מוצרים" };
+const titles = { documents: "בירוקרטיה סיטי וואש", salary: "שכר", pension: "פנסיה", inventory: "מלאי", statistics: "סטטיסטיקה", mappings: "התאמות מוצרים" };
 document.querySelectorAll(".nav-item").forEach(item => {
   item.addEventListener("click", () => {
     document.querySelectorAll(".nav-item").forEach(i => i.classList.remove("active"));

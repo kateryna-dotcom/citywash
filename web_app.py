@@ -69,6 +69,7 @@ LOGIN_HTML_PATH = os.path.join(BASE_DIR, "login.html")
 PENSION_HTML_PATH = os.path.join(BASE_DIR, "pension.html")
 INVENTORY_HTML_PATH = os.path.join(BASE_DIR, "inventory.html")
 MAPPINGS_HTML_PATH = os.path.join(BASE_DIR, "mappings.html")
+STATISTICS_HTML_PATH = os.path.join(BASE_DIR, "statistics.html")
 
 # How often the background thread checks Gmail for new supplier invoices.
 INVOICE_POLL_INTERVAL_SECONDS = 15 * 60
@@ -260,6 +261,15 @@ def mappings_page(request: Request):
     if redirect:
         return redirect
     with open(MAPPINGS_HTML_PATH, encoding="utf-8") as f:
+        return f.read()
+
+
+@app.get("/statistics", response_class=HTMLResponse)
+def statistics_page(request: Request):
+    redirect = _require_page_auth(request)
+    if redirect:
+        return redirect
+    with open(STATISTICS_HTML_PATH, encoding="utf-8") as f:
         return f.read()
 
 
@@ -661,6 +671,23 @@ def inventory_list(request: Request, branch: str = None):
         return records
     except Exception as e:  # noqa: BLE001
         return Response(f"Error loading invoice records: {e}", status_code=500)
+
+
+@app.get("/api/inventory/stats")
+def inventory_stats(request: Request):
+    """Full-history, lightweight feed for the סטטיסטיקה tab: every invoice
+    she's marked as handled (status='ok'), with just enough per row (branch/
+    supplier/company/received_at/line_items) for the client to bucket spend
+    by month/branch/supplier/company itself -- same client-side aggregation
+    approach /inventory already uses for its monthly total, just over the
+    full history instead of one page."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        return invoice_store.list_ok_records_for_stats()
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error loading stats: {e}", status_code=500)
 
 
 def _ready_for_entry_shape(r: dict) -> dict | None:
