@@ -139,6 +139,10 @@
         <table class="bulk-table" id="bulkTable"></table>
       </div>
       <div class="bulk-row-controls">
+        <label id="bulkSkipInvalidWrap" style="display:none;font-size:13.5px;color:#5b7186;align-items:center;gap:6px;">
+          <input type="checkbox" id="bulkSkipInvalid" onchange="renderBulkPreview()">
+          דלג/י על השורות עם שגיאות וצור/י מסמכים רק לשורות התקינות
+        </label>
         <button class="bulk-btn" id="bulkGenerateBtn" onclick="generateBulkZip()" disabled>⬇️ צור/י את כל המסמכים (ZIP)</button>
         <span class="bulk-generate-status" id="bulkGenerateStatus"></span>
       </div>
@@ -802,9 +806,15 @@ function renderBulkPreview() {
   document.getElementById("bulkPreviewCard").style.display = "";
   const validCount = BULK_ROWS.filter(r => r.valid).length;
   const invalidCount = BULK_ROWS.length - validCount;
-  document.getElementById("bulkSummary").innerHTML = invalidCount
-    ? `נמצאו ${BULK_ROWS.length} שורות, מתוכן <strong style="color:#d92b2b">${invalidCount} עם שגיאות</strong> — יש לתקן בקובץ ולהעלות מחדש לפני היצירה.`
-    : `נמצאו ${BULK_ROWS.length} שורות, כולן תקינות. אפשר ליצור.`;
+  const skipWrap = document.getElementById("bulkSkipInvalidWrap");
+  const skipInvalid = document.getElementById("bulkSkipInvalid").checked;
+  skipWrap.style.display = invalidCount ? "flex" : "none";
+
+  document.getElementById("bulkSummary").innerHTML = !invalidCount
+    ? `נמצאו ${BULK_ROWS.length} שורות, כולן תקינות. אפשר ליצור.`
+    : skipInvalid
+    ? `נמצאו ${BULK_ROWS.length} שורות — <strong style="color:#1a8a4a">${validCount} תקינות ייווצרו</strong>, <strong style="color:#d92b2b">${invalidCount} עם שגיאות ידולגו</strong>.`
+    : `נמצאו ${BULK_ROWS.length} שורות, מתוכן <strong style="color:#d92b2b">${invalidCount} עם שגיאות</strong> — יש לתקן בקובץ ולהעלות מחדש לפני היצירה, או לסמן למעלה "דלג/י על השורות עם שגיאות".`;
 
   const table = document.getElementById("bulkTable");
   const headRow = "<tr><th>#</th><th>סוג</th><th>שם</th><th>ת.ז</th><th>תחנה</th><th>תאריך</th><th>שכר</th><th>סטטוס</th></tr>";
@@ -812,6 +822,8 @@ function renderBulkPreview() {
     const payLabel = r.PAY_TYPE === "monthly" ? "חודשי" : (r.PAY_TYPE === "hourly" ? "שעתי" : "?");
     const status = r.valid
       ? '<span class="bulk-status-ok">✓ תקין</span>'
+      : skipInvalid
+      ? `<span class="bulk-status-err">${r.errors.map(escapeHtmlBulk).join("; ")} — ידולג</span>`
       : `<span class="bulk-status-err">${r.errors.map(escapeHtmlBulk).join("; ")}</span>`;
     return `<tr class="${r.valid ? "" : "bulk-invalid"}">
       <td>${i + 1}</td>
@@ -827,7 +839,7 @@ function renderBulkPreview() {
   table.innerHTML = headRow + bodyRows;
 
   const genBtn = document.getElementById("bulkGenerateBtn");
-  genBtn.disabled = !(BULK_ROWS.length > 0 && invalidCount === 0);
+  genBtn.disabled = !(BULK_ROWS.length > 0 && (invalidCount === 0 || (skipInvalid && validCount > 0)));
   document.getElementById("bulkGenerateStatus").textContent = "";
 }
 
@@ -840,7 +852,10 @@ async function generateBulkZip() {
   const genBtn = document.getElementById("bulkGenerateBtn");
   genBtn.disabled = true;
   statusEl.textContent = "מכין/ה מסמכים... זה יכול לקחת כדקה עבור הרבה אנשים.";
-  const people = BULK_ROWS.map(r => ({
+  const skipInvalid = document.getElementById("bulkSkipInvalid").checked;
+  const rows = skipInvalid ? BULK_ROWS.filter(r => r.valid) : BULK_ROWS;
+  const skippedCount = BULK_ROWS.length - rows.length;
+  const people = rows.map(r => ({
     type: r.type, EMPLOYEE_NAME: r.EMPLOYEE_NAME, EMPLOYEE_ID: r.EMPLOYEE_ID,
     STATION_NAME: r.STATION_NAME, START_DATE: r.START_DATE, PAY_TYPE: r.PAY_TYPE,
     AMOUNT: r.AMOUNT, JOB_TITLE: r.JOB_TITLE, SCHEDULE_TYPE: r.SCHEDULE_TYPE,
@@ -860,7 +875,7 @@ async function generateBulkZip() {
     document.body.appendChild(a);
     a.click();
     a.remove();
-    statusEl.innerHTML = `<span class="bulk-status-ok">✅ נוצרו ${people.length} מסמכים והורדו כקובץ ZIP.</span>`;
+    statusEl.innerHTML = `<span class="bulk-status-ok">✅ נוצרו ${people.length} מסמכים והורדו כקובץ ZIP.${skippedCount ? ` (${skippedCount} שורות עם שגיאות דולגו.)` : ""}</span>`;
   } catch (e) {
     statusEl.innerHTML = `<span class="bulk-status-err">שגיאה: ${escapeHtmlBulk(e.message)}</span>`;
   }
