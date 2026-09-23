@@ -54,6 +54,19 @@ def init_db():
             # Which City Wash legal entity (companies.py) the invoice was
             # billed to -- same auto-detect-then-editable pattern as branch.
             cur.execute("ALTER TABLE invoice_records ADD COLUMN IF NOT EXISTS company TEXT;")
+            # One-time backfill (idempotent -- the WHERE clause matches
+            # nothing on later startups) for records ingested before
+            # invoice_ingest._is_non_invoice_subject existed: bank-transfer
+            # receipts / כרטסת / גיול חובות that got created as ordinary
+            # needs_review/no_pdf_found rows and were cluttering the מлАи
+            # review list with nothing to actually review (Kateryna
+            # 2026-09-23). Restricted to those two statuses so a completed
+            # ("ok") record is never silently hidden.
+            cur.execute(r"""
+                UPDATE invoice_records SET status='irrelevant', updated_at=now()
+                WHERE status IN ('needs_review', 'no_pdf_found')
+                  AND subject ~ 'העברה\s*(לבנק|בנקאית)|כרטסת|גיול\s*חוב'
+            """)
         conn.commit()
 
 
@@ -116,16 +129,22 @@ def get_pdf_data(record_id: int) -> bytes:
 
 
 def list_records(branch: str = None, limit: int = 200) -> list:
+    """status='irrelevant' (bank-transfer receipts, כרטסת, גיול חובות --
+    see invoice_ingest._is_non_invoice_subject) is excluded by default: those
+    rows only exist so the message isn't re-fetched on a future scan, not to
+    be reviewed."""
     with _get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             if branch:
                 cur.execute(f"""
-                    SELECT {_RECORD_COLUMNS} FROM invoice_records WHERE branch=%s
+                    SELECT {_RECORD_COLUMNS} FROM invoice_records
+                    WHERE branch=%s AND status <> 'irrelevant'
                     ORDER BY (status = 'needs_review') DESC, received_at DESC LIMIT %s
                 """, (branch, limit))
             else:
                 cur.execute(f"""
                     SELECT {_RECORD_COLUMNS} FROM invoice_records
+                    WHERE status <> 'irrelevant'
                     ORDER BY (status = 'needs_review') DESC, received_at DESC LIMIT %s
                 """, (limit,))
             return [dict(r) for r in cur.fetchall()]
