@@ -50,6 +50,21 @@ SUPPLIER_DOMAINS = [
     "grow.security",
 ]
 
+# Suppliers who deliver their invoice as a download LINK in the email body
+# instead of a PDF attachment -- both invoice-one.com (Menahel4U, used by
+# "פטרוטק 2017") and morning.co (Green Invoice, used by "ברקו סנטס בע\"מ")
+# are shared e-invoicing platforms acting on the actual supplier's behalf
+# (confirmed against real emails 2026-09-24, per Kateryna noticing these
+# weren't showing up in מлАי at all). Kept separate from SUPPLIER_DOMAINS
+# above because _build_supplier_query's has:attachment filter below must
+# NOT apply to these -- they never have one -- or their emails would never
+# match the search at all. See invoice_ingest._fetch_linked_pdf for how the
+# actual PDF gets pulled from the link.
+LINK_INVOICE_DOMAINS = [
+    "invoice-one.com",
+    "morning.co",
+]
+
 
 def _get_access_token() -> str:
     client_id = os.environ.get("GMAIL_CLIENT_ID")
@@ -79,8 +94,12 @@ def _headers() -> dict:
 
 
 def _build_supplier_query(after: datetime | None) -> str:
-    domain_clause = " OR ".join(f"from:{d}" for d in SUPPLIER_DOMAINS)
-    query = f"({domain_clause}) has:attachment"
+    # has:attachment only makes sense for the PDF-attachment suppliers --
+    # applying it to LINK_INVOICE_DOMAINS too would exclude every one of
+    # their emails, since those never carry an attachment at all.
+    attachment_clause = " OR ".join(f"from:{d}" for d in SUPPLIER_DOMAINS)
+    link_clause = " OR ".join(f"from:{d}" for d in LINK_INVOICE_DOMAINS)
+    query = f"(({attachment_clause}) has:attachment OR ({link_clause}))"
     if after:
         # Gmail's `after:` operator is date-only (no time-of-day), so we
         # over-fetch by using the date and rely on the caller to filter out
@@ -126,6 +145,21 @@ def extract_header(message: dict, name: str) -> str:
     return ""
 
 
+def extract_html_body(message: dict) -> str:
+    """Decoded text/html body -- used for LINK_INVOICE_DOMAINS suppliers,
+    whose actual PDF-download link only exists inside the email's HTML
+    (see invoice_ingest._fetch_linked_pdf), never as an attachment. Empty
+    string if the message has no text/html part."""
+    payload = message.get("payload", {})
+    for part in _walk_parts(payload):
+        if part.get("mimeType") == "text/html":
+            data_b64url = part.get("body", {}).get("data")
+            if data_b64url:
+                raw = base64.urlsafe_b64decode(data_b64url + "=" * (-len(data_b64url) % 4))
+                return raw.decode("utf-8", errors="replace")
+    return ""
+
+
 def find_pdf_attachments(message: dict) -> list[dict]:
     """Returns [{filename, attachmentId}, ...] for every PDF part in the message."""
     out = []
@@ -153,7 +187,7 @@ def get_attachment_bytes(message_id: str, attachment_id: str) -> bytes:
 
 def supplier_domain_for(sender_header: str) -> str | None:
     sender_header = sender_header.lower()
-    for domain in SUPPLIER_DOMAINS:
+    for domain in SUPPLIER_DOMAINS + LINK_INVOICE_DOMAINS:
         if domain in sender_header:
             return domain
     return None

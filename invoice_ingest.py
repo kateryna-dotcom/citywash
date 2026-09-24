@@ -12,6 +12,7 @@ printed line total or not) and every invoice still keeps its full
 raw_text -- nothing is silently mis-entered into Cash On Tab from this
 step alone; Kateryna reviews on the dashboard before anything is entered.
 """
+import html
 import io
 import re
 import subprocess
@@ -19,6 +20,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
+import requests
 from pypdf import PdfReader
 
 import branches
@@ -33,9 +35,13 @@ import item_mapping_store
 _BRANCH_SUBJECT_RE = re.compile(r"לסניף\s+(.+)$")
 
 # Common Hebrew invoice-number label variants, e.g. "חשבונית מס 213044",
-# "חשבונית מס' IN264002223", "מספר תעודה: 108745".
+# "חשבונית מס' IN264002223", "מספר תעודה: 108745", and (the optional
+# "(?:מספר)?") פטרוטק 2017's subject wording "חשבונית מס מספר 2026006177",
+# which repeats "מספר" between the label and the number itself (confirmed
+# live 2026-09-24 -- without this, "חשבונית מס" matched but the digits
+# never did, since מספר sat in between and isn't in [A-Za-z0-9\-]).
 _INVOICE_NUMBER_RE = re.compile(
-    r"(?:חשבונית\s*מס'?|מספר\s*תעודה|תעודה\s*מס'?)\s*[:\-]?\s*([A-Za-z0-9\-]+)"
+    r"(?:חשבונית\s*מס'?|מספר\s*תעודה|תעודה\s*מס'?)\s*(?:מספר)?\s*[:\-]?\s*([A-Za-z0-9\-]+)"
 )
 
 # grow.security's own subject line ("חשבונית מס עבור עסקה 3739 ב- אמפייר
@@ -64,6 +70,51 @@ _NON_INVOICE_SUBJECT_RE = re.compile(r"העברה\s*(לבנק|בנקאית)|כר
 
 def _is_non_invoice_subject(subject: str) -> bool:
     return bool(_NON_INVOICE_SUBJECT_RE.search(subject or ""))
+
+
+# invoice-one.com's own "לחץ כאן לצפיה במסמך" link only opens a JS-rendered
+# viewer app (an Angular SPA -- confirmed 2026-09-24 trying to fetch it
+# directly returns an empty shell page, no PDF). That app itself pulls the
+# PDF from this API endpoint using the same DocumentID the viewer link
+# carries -- confirmed live against a real "פטרוטק 2017" invoice: a plain
+# unauthenticated GET returns the PDF directly, no login/session needed.
+_INVOICE_ONE_LINK_RE = re.compile(
+    r'href="(https://invoice-one\.com/ViewerNew/pages/Y_GreeViewer_document/([A-Za-z0-9]+))"'
+)
+
+# morning.co (Green Invoice)'s "להורדת המסמך" button IS already the direct
+# download link -- no transformation needed, confirmed live against a real
+# "ברקו סנטס בע\"מ" invoice.
+_GREENINVOICE_LINK_RE = re.compile(
+    r'href="(https://www\.greeninvoice\.co\.il/api/v1/documents/download\?[^"]+)"'
+)
+
+
+def _fetch_linked_pdf(supplier_domain: str, html_body: str) -> bytes | None:
+    """Downloads the invoice PDF for gmail_client.LINK_INVOICE_DOMAINS
+    suppliers, who deliver it via a link in the email body instead of an
+    attachment (Kateryna noticed these weren't showing up in מлАי at all,
+    2026-09-24). Returns None if the expected link isn't found in this
+    email's HTML -- caller then falls back to the same no_pdf_found record
+    a PDF-attachment supplier gets when nothing was actually attached."""
+    if not html_body:
+        return None
+    if supplier_domain == "invoice-one.com":
+        m = _INVOICE_ONE_LINK_RE.search(html_body)
+        if not m:
+            return None
+        document_id = m.group(2)
+        url = f"https://invoice-one.com/ViewerNew/api/GreeViewer/Document/Download?DocumentID={document_id}"
+    elif supplier_domain == "morning.co":
+        m = _GREENINVOICE_LINK_RE.search(html_body)
+        if not m:
+            return None
+        url = html.unescape(m.group(1))
+    else:
+        return None
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    return resp.content
 
 
 def _num(s):
@@ -667,6 +718,98 @@ def parse_grow_security(text: str, pdf_bytes: bytes = None) -> list:
     return []
 
 
+# "פטרוטק 2017" (Petrotech), delivered via invoice-one.com/Menahel4U (see
+# gmail_client.LINK_INVOICE_DOMAINS). Built from one real sample (invoice
+# 2026006177, 3 line items) fetched live 2026-09-24 -- pypdf's PLAIN
+# extract_text() (not layout mode, unlike most suppliers above) keeps this
+# PDF's Hebrew in correct reading order, so no un-reversing is needed here.
+# The row's own numeric columns come out reliably in a fixed order (total,
+# price, then a warehouse code glued right before the barcode) confirmed by
+# reconciling qty*price against the printed total on all 3 sample rows --
+# but the ROW NUMBER glues directly onto the quantity digits with no
+# separator when a row has no description text of its own (e.g. "1208" for
+# row 1 = row "1" + qty "208"), so _strip_row_number below strips it using
+# the row's own known 1-based position rather than trying to regex the
+# split -- same reasoning as description, which similarly may have the row
+# number glued onto its front when text IS present (e.g. "2ANTI RUST...").
+_PETROTECH_ROW_RE = re.compile(
+    r'(?P<desc>.*?)(?P<qty>\d+)₪\s*(?P<total>[\d,]+\.\d{2})\s*'
+    r'₪\s*(?P<price>[\d,]+\.\d{2})\s*\d+\s*(?P<barcode>\d{10,14})',
+    re.DOTALL,
+)
+
+
+def _strip_row_number(row_number: int, qty: str, desc: str) -> tuple:
+    expected = str(row_number)
+    if qty.startswith(expected) and len(qty) > len(expected):
+        qty = qty[len(expected):]
+        return qty, desc
+    # desc always starts with whatever text sat right after the PREVIOUS
+    # row's match (a leading newline for every row but the first) --
+    # confirmed live 2026-09-24: without lstrip() first, "\n2ANTI RUST..."
+    # never matched startswith("2") at all, so the row number silently
+    # stayed glued onto every description after the first row.
+    stripped = desc.lstrip()
+    if stripped.startswith(expected):
+        desc = stripped[len(expected):]
+    return qty, desc
+
+
+def parse_petrotech(text: str, pdf_bytes: bytes = None) -> list:
+    start_idx = text.find("# ")
+    start = start_idx + 2 if start_idx != -1 else 0
+    end_m = re.search(r"\d{1,2}/\d{1,2}/\d{4}", text[start:])
+    end = start + end_m.start() if end_m else len(text)
+    section = text[start:end]
+
+    items = []
+    for i, m in enumerate(_PETROTECH_ROW_RE.finditer(section), start=1):
+        qty_str, desc = _strip_row_number(i, m.group("qty"), m.group("desc"))
+        qty, price, total = _num(qty_str), _num(m.group("price")), _num(m.group("total"))
+        confident = None not in (qty, price, total) and abs(round(qty * price, 2) - total) < 0.5
+        items.append({
+            "barcode": m.group("barcode"), "description": re.sub(r"\s+", " ", desc).strip(),
+            "quantity": qty, "unit_price": price, "total": total, "confident": confident,
+        })
+    return items
+
+
+# "ברקו סנטס בע\"מ" (Barco Scents), delivered via morning.co/Green Invoice
+# (see gmail_client.LINK_INVOICE_DOMAINS). Built from ONE real sample
+# (invoice 51400, single line item) fetched live 2026-09-24 -- unlike
+# Petrotech, no second sample was available to confirm this regex handles a
+# multi-item invoice or a description that itself contains digits, so
+# expect this to need a refinement pass once more of these come through.
+#
+# morning.co is a shared e-invoicing platform other suppliers could also
+# use -- this parser is keyed to morning.co only because ברקו סנטס is the
+# only one seen through it so far; if a different supplier starts sending
+# invoices via morning.co too, this would wrongly apply to their layout as
+# well, since _LINE_ITEM_PARSERS below dispatches by domain, not by sender
+# name. Revisit (dispatch on the actual supplier name from the PDF instead,
+# same as companies.detect_company already does by ח.פ regardless of
+# domain) if/when that happens.
+_BARCO_SCENTS_ROW_RE = re.compile(
+    r'₪(?P<total>[\d,]+\.\d{2})\s*₪(?P<price>[\d,]+\.\d{2})\s*'
+    r'(?P<desc1>\S+)\s+(?P<sku>\d{8,14})\s+(?P<qty>\d+)\s+'
+    r'(?P<desc2>.+?)(?=₪|\Z)',
+    re.DOTALL,
+)
+
+
+def parse_barco_scents(text: str, pdf_bytes: bytes = None) -> list:
+    items = []
+    for m in _BARCO_SCENTS_ROW_RE.finditer(text):
+        qty, price, total = _num(m.group("qty")), _num(m.group("price")), _num(m.group("total"))
+        confident = None not in (qty, price, total) and abs(round(qty * price, 2) - total) < 0.5
+        desc = m.group("desc1") + " " + re.sub(r"\s+", " ", m.group("desc2")).strip()
+        items.append({
+            "sku": m.group("sku"), "description": desc.strip(),
+            "quantity": qty, "unit_price": price, "total": total, "confident": confident,
+        })
+    return items
+
+
 _LINE_ITEM_PARSERS = {
     "emi-1.com": parse_emi,
     "moshaev-inv.com": parse_moshaev,
@@ -675,6 +818,8 @@ _LINE_ITEM_PARSERS = {
     "pavilion-spark.co.il": parse_pavilion_spark,
     "victoriascent.co.il": parse_victoria_scent,
     "grow.security": parse_grow_security,
+    "invoice-one.com": parse_petrotech,
+    "morning.co": parse_barco_scents,
 }
 
 
@@ -719,6 +864,23 @@ def _extract_pdf_text(pdf_bytes: bytes) -> str:
         return "\n".join((page.extract_text() or "") for page in reader.pages)
     except Exception as e:  # noqa: BLE001
         return f"[could not extract text: {e}]"
+
+
+def _company_detection_text(pdf_bytes: bytes, plain_text: str) -> str:
+    """companies.detect_company just needs the ח.פ digits to appear
+    somewhere, but pypdf's plain extract_text() can drop a field's value
+    entirely rather than garble it (confirmed live 2026-09-24: a ברקו סנטס
+    invoice's own ח.פ/ת.ז value was simply missing from plain_text, while
+    pypdf's layout-mode extraction -- pure Python, same low-risk approach
+    parse_grow_security already uses -- had it intact). Appends layout text
+    as a supplementary source for every supplier, not just this one, since
+    it only ever adds more text to search and can't make detection worse."""
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        layout_text = "\n".join((page.extract_text(extraction_mode="layout") or "") for page in reader.pages)
+    except Exception:  # noqa: BLE001
+        layout_text = ""
+    return plain_text + "\n" + layout_text if layout_text else plain_text
 
 
 def _guess_branch(subject: str, text: str) -> str:
@@ -810,8 +972,28 @@ def process_new_invoices(lookback_days: int = 30) -> dict:
                 continue
 
             pdf_attachments = gmail_client.find_pdf_attachments(message)
+            html_body = ""
 
-            if not pdf_attachments:
+            if pdf_attachments:
+                # Most of these emails have exactly one invoice PDF; if
+                # there's more than one, process the first and note the
+                # rest in the text.
+                first = pdf_attachments[0]
+                pdf_filename = first["filename"]
+                pdf_bytes = gmail_client.get_attachment_bytes(message_id, first["attachmentId"])
+            elif supplier_domain in gmail_client.LINK_INVOICE_DOMAINS:
+                # No attachment at all -- this supplier delivers the PDF via
+                # a download link in the body instead (see
+                # _fetch_linked_pdf). No synthetic filename beyond the
+                # message id since there's no real attachment name to use.
+                html_body = gmail_client.extract_html_body(message)
+                pdf_bytes = _fetch_linked_pdf(supplier_domain, html_body)
+                pdf_filename = f"{message_id}.pdf" if pdf_bytes else None
+            else:
+                pdf_bytes = None
+                pdf_filename = None
+
+            if not pdf_bytes:
                 # Nothing to extract, but still record it so it doesn't get
                 # re-scanned every run.
                 invoice_store.create_record({
@@ -830,12 +1012,15 @@ def process_new_invoices(lookback_days: int = 30) -> dict:
                 created += 1
                 continue
 
-            # Most of these emails have exactly one invoice PDF; if there's
-            # more than one, process the first and note the rest in the text.
-            first = pdf_attachments[0]
-            pdf_bytes = gmail_client.get_attachment_bytes(message_id, first["attachmentId"])
             text = _extract_pdf_text(pdf_bytes)
             line_items = parse_line_items(supplier_domain, text, pdf_bytes=pdf_bytes)
+            # The branch is sometimes only named in the email body rather
+            # than the PDF itself (e.g. ברקו סנטס's "...סניף רעננה" intro
+            # line, with no branch on the PDF's own bill-to line) -- feed
+            # both into detection. branches.detect_branch just checks
+            # substring presence, so appending the (HTML, tags and all)
+            # body text never hurts the PDF-only suppliers either.
+            branch_text = text + "\n" + html_body if html_body else text
 
             invoice_store.create_record({
                 "gmail_message_id": message_id,
@@ -843,12 +1028,12 @@ def process_new_invoices(lookback_days: int = 30) -> dict:
                 "sender_email": sender,
                 "subject": subject,
                 "received_at": received_at,
-                "pdf_filename": first["filename"],
+                "pdf_filename": pdf_filename,
                 "raw_text": text,
                 "pdf_data": pdf_bytes,
-                "branch": _guess_branch(subject, text),
+                "branch": _guess_branch(subject, branch_text),
                 "invoice_number": guess_invoice_number(subject, text, pdf_bytes=pdf_bytes),
-                "company": companies.detect_company(text),
+                "company": companies.detect_company(_company_detection_text(pdf_bytes, text)),
                 "line_items": line_items or None,
                 "status": "needs_review",
             })

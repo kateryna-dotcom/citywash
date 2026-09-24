@@ -17,6 +17,15 @@ SUPPLIER_CASHONTAB_NAMES = {
     # Best guess from the sender display name on their e-invoice emails --
     # not yet confirmed against Cash On Tab's actual ספק list (2026-08-31).
     "grow.security": "אמפייר אס",
+    # Best guess from the name printed on the invoice PDF itself -- not yet
+    # confirmed against Cash On Tab's actual ספק list (2026-09-24). Both
+    # invoice-one.com and morning.co are shared e-invoicing platforms other
+    # suppliers could also use, so if a different supplier's invoices start
+    # arriving through the same domain, this entry (and the domain-keyed
+    # line-item parser in invoice_ingest.py) would need to become
+    # supplier-aware instead of purely domain-based.
+    "invoice-one.com": "פטרוטק בע\"מ",
+    "morning.co": "ברקו סנטס בע\"מ",
 }
 
 # Cash On Tab's own ספק search sometimes doesn't match SUPPLIER_CASHONTAB_NAMES
