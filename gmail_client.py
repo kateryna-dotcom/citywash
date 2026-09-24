@@ -108,14 +108,41 @@ def _build_supplier_query(after: datetime | None) -> str:
     return query
 
 
-def list_new_invoice_messages(after: datetime | None = None, max_results: int = 50) -> list[dict]:
+def list_new_invoice_messages(after: datetime | None = None, page_size: int = 100, max_pages: int = 10) -> list[dict]:
     """Returns [{id, threadId}, ...] for candidate invoice emails from the
-    watched supplier domains. Caller is responsible for de-duplicating
-    against already-processed message ids (stored in Postgres)."""
-    params = {"q": _build_supplier_query(after), "maxResults": max_results}
-    resp = requests.get(f"{API_BASE}/messages", headers=_headers(), params=params, timeout=30)
-    _raise_with_body(resp)
-    return resp.json().get("messages", [])
+    watched supplier domains, across the WHOLE lookback window -- not just
+    Gmail's first page of results. Caller is responsible for
+    de-duplicating against already-processed message ids (stored in
+    Postgres).
+
+    Missing until now: a single un-paginated call capped at 50 results
+    (Gmail's default page size) -- fine while total matches across the
+    lookback window stayed under 50, but with 8 supplier domains now
+    watched (up from 6) that's no longer safe to assume: confirmed live
+    2026-09-24 that the last-30-days query alone matches 200+ messages, so
+    that old single-page call would only ever see the ~50 most recent ones
+    -- Kateryna's own point 2026-09-24, "September's invoice-one.com/
+    morning.co emails aren't showing up at all", since (being sent earlier
+    in the month, at typically lower volume than the highest-traffic
+    suppliers) they never made it into that top-50 window on any poll
+    cycle, no matter how many times it ran. max_pages is a plain safety
+    cap against an unbounded loop, not a limit anyone should expect to hit
+    in practice."""
+    query = _build_supplier_query(after)
+    messages = []
+    page_token = None
+    for _ in range(max_pages):
+        params = {"q": query, "maxResults": page_size}
+        if page_token:
+            params["pageToken"] = page_token
+        resp = requests.get(f"{API_BASE}/messages", headers=_headers(), params=params, timeout=30)
+        _raise_with_body(resp)
+        data = resp.json()
+        messages.extend(data.get("messages", []))
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    return messages
 
 
 def get_message(message_id: str) -> dict:
