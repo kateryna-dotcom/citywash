@@ -665,7 +665,18 @@ async function checkNow() {
     return;
   }
   const result = await res.json();
-  statusEl.textContent = `נמצאו ${result.created} חדשות (${result.skipped} כבר נבדקו)`;
+  let msg = `נמצאו ${result.created} חדשות (${result.skipped} כבר נבדקו)`;
+  // Per-message failures used to come back in result.errors but were never
+  // actually shown -- a message that failed here never gets a record at
+  // all (so it's invisible as a card too), meaning it silently kept
+  // failing the exact same way on every future check with no way to tell
+  // from the UI (Kateryna 2026-09-24: "nothing shows up", with no visible
+  // reason why). textContent, not innerHTML -- these are our own
+  // exception messages, not worth risking on an escaping mistake.
+  if (result.errors && result.errors.length) {
+    msg += ` — ${result.errors.length} שגיאות: ` + result.errors.join(" | ");
+  }
+  statusEl.textContent = msg;
   await loadRecords();
 }
 
