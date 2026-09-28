@@ -65,7 +65,16 @@ _HEBREW_CHAR_RE = re.compile(r"[֐-׿]")
 # items never resolve and they just sit in מלАי as "needs review" clutter
 # with nothing to actually review. Skip them by subject before ever
 # downloading/parsing the PDF (Kateryna 2026-09-23: "לא רלוונטי").
-_NON_INVOICE_SUBJECT_RE = re.compile(r"העברה\s*(לבנק|בנקאית)|כרטסת|גיול\s*חוב")
+#
+# morning.co (ברקו סנטס) sends actual payment receipts (קבלה) the same way
+# it sends invoices -- link in the body, no attachment -- so once that
+# link-fetch path started working (2026-09-28) these started showing up in
+# מлАי too. Subject is "קבלה <number> - <supplier>", with no "העברה" for
+# the pattern above to catch (Kateryna 2026-09-28: "קבלות не надо только
+# хשבוניות"). Anchored to the start of the subject, same as every real
+# קבלה subject seen so far, so this can't match a legitimate חשבונית
+# subject that merely mentions קבלה somewhere later in the text.
+_NON_INVOICE_SUBJECT_RE = re.compile(r"העברה\s*(לבנק|בנקאית)|כרטסת|גיול\s*חוב|^\s*קבלה\b")
 
 
 def _is_non_invoice_subject(subject: str) -> bool:
