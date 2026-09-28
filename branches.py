@@ -5,6 +5,7 @@ Used to: (1) best-effort auto-detect the branch from invoice text, and
 (2) populate the branch picker in the מלАי review UI so Kateryna can assign
 or correct it in one click.
 """
+import re
 
 BRANCHES = [
     "דור אלון נתב\"ג",
@@ -92,7 +93,20 @@ def detect_branch(text: str) -> str | None:
     candidates = []
     for branch in BRANCHES:
         words = [w for w in branch.replace('"', "").split() if w]
-        if words and all(w in text for w in words):
+        if not words:
+            continue
+        if all(w in text for w in words):
+            candidates.append(branch)
+        elif len(words) > 1 and re.search(rf"סניף\s+{re.escape(words[0])}\b", text):
+            # Some suppliers abbreviate a multi-word branch name to just its
+            # first word in their own subject/body -- confirmed live
+            # 2026-09-28 against morning.co/ברקו סנטס, whose "סניף ראשון
+            # -27.9" (for "ראשון לציון") never mentions לציון anywhere, so
+            # the all-words check above can never pass. The bare first word
+            # alone ("ראשון" = "first") is far too common a Hebrew word to
+            # match safely on its own, but "סניף" sitting directly before
+            # it is a specific enough signal that this really is the branch
+            # label, not the word's ordinary use.
             candidates.append(branch)
     if not candidates:
         return None

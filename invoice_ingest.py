@@ -784,11 +784,15 @@ def parse_petrotech(text: str, pdf_bytes: bytes = None) -> list:
 
 
 # "ברקו סנטס בע\"מ" (Barco Scents), delivered via morning.co/Green Invoice
-# (see gmail_client.LINK_INVOICE_DOMAINS). Built from ONE real sample
-# (invoice 51400, single line item) fetched live 2026-09-24 -- unlike
-# Petrotech, no second sample was available to confirm this regex handles a
-# multi-item invoice or a description that itself contains digits, so
-# expect this to need a refinement pass once more of these come through.
+# (see gmail_client.LINK_INVOICE_DOMAINS). First built from one single-item
+# sample (invoice 51400, 2026-09-24) with desc1 as exactly one \S+ token
+# before the sku -- confirmed broken live 2026-09-28 against a real
+# multi-item invoice (51412): its 3rd item's product name is TWO words
+# before the barcode ("tsunami- laundery 810624033397"), not one, so that
+# item silently never matched at all (only 2 of 3 items came through,
+# undercounting the invoice total from 424.80 to 270 -- Kateryna's own
+# report). desc1 is now a lazy .+? instead of \S+, so it absorbs however
+# many words sit before the sku digits, same as desc2 already does after.
 #
 # morning.co is a shared e-invoicing platform other suppliers could also
 # use -- this parser is keyed to morning.co only because ברקו סנטס is the
@@ -800,7 +804,7 @@ def parse_petrotech(text: str, pdf_bytes: bytes = None) -> list:
 # domain) if/when that happens.
 _BARCO_SCENTS_ROW_RE = re.compile(
     r'₪(?P<total>[\d,]+\.\d{2})\s*₪(?P<price>[\d,]+\.\d{2})\s*'
-    r'(?P<desc1>\S+)\s+(?P<sku>\d{8,14})\s+(?P<qty>\d+)\s+'
+    r'(?P<desc1>.+?)\s+(?P<sku>\d{8,14})\s+(?P<qty>\d+)\s+'
     r'(?P<desc2>.+?)(?=₪|\Z)',
     re.DOTALL,
 )
