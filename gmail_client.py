@@ -108,19 +108,33 @@ def _headers() -> dict:
 
 
 def _build_supplier_query(after: datetime | None) -> str:
-    # has:attachment only makes sense for the PDF-attachment suppliers --
-    # applying it to LINK_INVOICE_DOMAINS too would exclude every one of
-    # their emails, since those never carry an attachment at all.
-    # SENDER_ALIASES join the same has:attachment-required group, since
-    # those are attachment-based too, just under a different address.
-    attachment_terms = [f"from:{d}" for d in SUPPLIER_DOMAINS] + [f"from:{a}" for a in SENDER_ALIASES]
-    attachment_clause = " OR ".join(attachment_terms)
-    link_clause = " OR ".join(f"from:{d}" for d in LINK_INVOICE_DOMAINS)
-    query = f"(({attachment_clause}) has:attachment OR ({link_clause}))"
+    # Each domain gets its OWN fully self-contained parenthesized clause
+    # -- (from:X has:attachment) -- joined by a top-level OR, rather than
+    # one shared "(A OR B OR C) has:attachment OR (D)" group. The shared
+    # form looked right but silently misbehaves: confirmed live 2026-09-28
+    # (Kateryna: invoice-one.com/morning.co invoices never showing up in
+    # מлАי at all, even though the domains and pagination were both
+    # correct) that Gmail doesn't scope has:attachment across an OR'd
+    # from: group the way that reads -- an isolated two-domain repro
+    # ((from:hadarrosen.com) has:attachment OR (from:invoice-one.com))
+    # returned zero invoice-one.com results and even non-attachment
+    # hadarrosen.com threads (has:attachment wasn't actually filtering
+    # anything), while explicit per-clause grouping
+    # ((from:hadarrosen.com has:attachment) OR (from:invoice-one.com))
+    # returned exactly the expected messages, confirmed again at full
+    # 9-clause scale and with after: appended. LINK_INVOICE_DOMAINS clauses
+    # have no has:attachment (those emails never carry one); SENDER_ALIASES
+    # get the same has:attachment clause shape as SUPPLIER_DOMAINS, just
+    # keyed by exact address instead of domain.
+    attachment_terms = [f"(from:{d} has:attachment)" for d in SUPPLIER_DOMAINS + list(SENDER_ALIASES)]
+    link_terms = [f"(from:{d})" for d in LINK_INVOICE_DOMAINS]
+    query = " OR ".join(attachment_terms + link_terms)
     if after:
         # Gmail's `after:` operator is date-only (no time-of-day), so we
         # over-fetch by using the date and rely on the caller to filter out
         # messages already processed (tracked by message id in our DB).
+        # Confirmed live that after: correctly ANDs across the whole OR
+        # chain above without needing an extra wrapping paren.
         query += f" after:{after.strftime('%Y/%m/%d')}"
     return query
 
