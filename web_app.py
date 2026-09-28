@@ -966,7 +966,11 @@ def inventory_debug_last_scan(request: Request):
     unauthorized = _require_api_auth(request)
     if unauthorized:
         return unauthorized
-    return _last_invoice_scan
+    try:
+        by_supplier = invoice_store.count_by_supplier_and_status()
+    except Exception as e:  # noqa: BLE001
+        by_supplier = [{"error": str(e)}]
+    return {**_last_invoice_scan, "by_supplier": by_supplier}
 
 
 @app.post("/api/inventory/reparse/{record_id}")
