@@ -166,6 +166,24 @@ def list_ok_records_for_stats() -> list:
             return [dict(r) for r in cur.fetchall()]
 
 
+def count_by_supplier_and_status() -> list:
+    """Temporary diagnostic (2026-09-28, see web_app._last_invoice_scan) --
+    every (supplier_domain, status) pair with its row count, INCLUDING
+    status='irrelevant' (list_records() excludes those). Answers directly
+    whether any row exists at all for a given supplier_domain, regardless
+    of what status it landed in -- a record that got created early with
+    status='no_pdf_found' before check-now's errors were made visible
+    would otherwise look identical to "never seen" from the outside."""
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT supplier_domain, status, count(*) AS n
+                FROM invoice_records GROUP BY supplier_domain, status
+                ORDER BY supplier_domain, status
+            """)
+            return [dict(r) for r in cur.fetchall()]
+
+
 def list_branches() -> list:
     with _get_conn() as conn:
         with conn.cursor() as cur:
