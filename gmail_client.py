@@ -65,6 +65,20 @@ LINK_INVOICE_DOMAINS = [
     "morning.co",
 ]
 
+# Exact sender ADDRESSES (not domains) that should be treated as an alias
+# of a SUPPLIER_DOMAINS entry -- for a supplier occasionally sending
+# through a generic mailbox instead of their own domain. hr.iqdox@gmail.com
+# ("HADAR ROSEN LTD 2") is the first case of this (Kateryna noticed one
+# such invoice missing from מлАי, 2026-09-28) -- "hadarrosen.com" wouldn't
+# match a gmail.com sender at all, and adding "gmail.com" itself to
+# SUPPLIER_DOMAINS would match countless unrelated personal senders. Uses
+# the SAME has:attachment-required, parse_hadarrosen pipeline as regular
+# hadarrosen.com mail once aliased -- confirmed this specific sender's
+# invoices do carry a real .pdf attachment, just not from that domain.
+SENDER_ALIASES = {
+    "hr.iqdox@gmail.com": "hadarrosen.com",
+}
+
 
 def _get_access_token() -> str:
     client_id = os.environ.get("GMAIL_CLIENT_ID")
@@ -97,7 +111,10 @@ def _build_supplier_query(after: datetime | None) -> str:
     # has:attachment only makes sense for the PDF-attachment suppliers --
     # applying it to LINK_INVOICE_DOMAINS too would exclude every one of
     # their emails, since those never carry an attachment at all.
-    attachment_clause = " OR ".join(f"from:{d}" for d in SUPPLIER_DOMAINS)
+    # SENDER_ALIASES join the same has:attachment-required group, since
+    # those are attachment-based too, just under a different address.
+    attachment_terms = [f"from:{d}" for d in SUPPLIER_DOMAINS] + [f"from:{a}" for a in SENDER_ALIASES]
+    attachment_clause = " OR ".join(attachment_terms)
     link_clause = " OR ".join(f"from:{d}" for d in LINK_INVOICE_DOMAINS)
     query = f"(({attachment_clause}) has:attachment OR ({link_clause}))"
     if after:
@@ -214,6 +231,9 @@ def get_attachment_bytes(message_id: str, attachment_id: str) -> bytes:
 
 def supplier_domain_for(sender_header: str) -> str | None:
     sender_header = sender_header.lower()
+    for address, aliased_domain in SENDER_ALIASES.items():
+        if address in sender_header:
+            return aliased_domain
     for domain in SUPPLIER_DOMAINS + LINK_INVOICE_DOMAINS:
         if domain in sender_header:
             return domain
