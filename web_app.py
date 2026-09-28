@@ -22,6 +22,7 @@ import re
 import threading
 import time
 import zipfile
+from datetime import datetime, timezone
 from urllib.parse import quote
 
 from fastapi import FastAPI, Request, UploadFile, File
@@ -74,16 +75,34 @@ STATISTICS_HTML_PATH = os.path.join(BASE_DIR, "statistics.html")
 # How often the background thread checks Gmail for new supplier invoices.
 INVOICE_POLL_INTERVAL_SECONDS = 15 * 60
 
+# Temporary diagnostic state (2026-09-28): Kateryna has reported for days
+# that invoice-one.com/morning.co invoices never show up in מлАи, but
+# getting a precise read of what the scan actually did back out of her
+# (Render log screenshots, status-bar text) hasn't converged after many
+# attempts. Records the last scan's raw result (both the background poll's
+# and any manual "בדיקה עכשיו") so it can be inspected directly via
+# GET /api/inventory/debug/last-scan instead of relaying it through her --
+# remove this once the underlying issue is actually found and fixed.
+_last_invoice_scan = {"at": None, "trigger": None, "result": None}
+
+
+def _record_scan_result(trigger: str, result: dict):
+    _last_invoice_scan["at"] = datetime.now(timezone.utc).isoformat()
+    _last_invoice_scan["trigger"] = trigger
+    _last_invoice_scan["result"] = result
+
 
 def _invoice_poll_loop():
     while True:
         try:
             result = invoice_ingest.process_new_invoices()
+            _record_scan_result("poll", result)
             if result.get("created"):
                 print(f"[invoice-poll] created={result['created']} skipped={result['skipped']}")
             if result.get("errors"):
                 print(f"[invoice-poll] errors={result['errors']}")
         except Exception as e:  # noqa: BLE001
+            _record_scan_result("poll", {"exception": str(e)})
             print(f"[invoice-poll] skipped this cycle: {e}")
         time.sleep(INVOICE_POLL_INTERVAL_SECONDS)
 
@@ -929,9 +948,25 @@ def inventory_check_now(request: Request):
     if unauthorized:
         return unauthorized
     try:
-        return invoice_ingest.process_new_invoices()
+        result = invoice_ingest.process_new_invoices()
+        _record_scan_result("manual", result)
+        return result
     except Exception as e:  # noqa: BLE001
+        _record_scan_result("manual", {"exception": str(e)})
         return Response(f"Error checking for new invoices: {e}", status_code=500)
+
+
+@app.get("/api/inventory/debug/last-scan")
+def inventory_debug_last_scan(request: Request):
+    """Temporary diagnostic (2026-09-28) -- see _last_invoice_scan's
+    comment. Same login requirement as every other /api/inventory/*
+    endpoint -- Kateryna opens this URL herself in her already-logged-in
+    browser and sends what it shows, same as any other page here. Remove
+    once the invoice-one.com/morning.co issue is found and fixed."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    return _last_invoice_scan
 
 
 @app.post("/api/inventory/reparse/{record_id}")
