@@ -69,6 +69,9 @@ CASHONTAB_CODE_DISAMBIGUATION = {
     # Two מחסן rows are both named "בית דגן" (codes 8 and 24) -- Kateryna
     # confirmed 2026-08-27 this branch is always code 24.
     "בית דגן": "24",
+    # Same for "כפר סבא" (codes 28 and 31) -- Kateryna confirmed
+    # 2026-09-29 this branch is always code 31.
+    "כפר סבא": "31",
 }
 
 
