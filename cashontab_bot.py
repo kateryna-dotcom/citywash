@@ -423,6 +423,11 @@ def _fill_line_item(page, item):
         row.get_by_role("button", name="שמור").click(timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
         _fail(page, f'לא נמצא כפתור "שמור" לשורת הפריט {item.get("code")}')
+    # The same "not this supplier's item" prompt can also pop only once
+    # שמור is clicked -- live run 2026-09-29 (פטרוטק, 7290011785505): the
+    # prompt appeared after the row's שמור, the row stayed unsaved behind
+    # it, and the final צור מסמך then failed. Kateryna: always answer כן.
+    _confirm_item_not_from_supplier(page, timeout=3000)
 
 
 def enter_invoice(invoice: dict) -> dict:
