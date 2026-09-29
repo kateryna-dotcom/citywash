@@ -40,8 +40,8 @@ SUPPLIER_CASHONTAB_SEARCH_OVERRIDES = {
     "victoriascent.co.il": "5",
     # "פטרוטק בע\"מ" (a guess from the invoice PDF) returned zero matches
     # live 2026-09-29 -- Kateryna confirmed its ספק code in Cash On Tab is
-    # 50030.
-    "invoice-one.com": "50030",
+    # 500030.
+    "invoice-one.com": "500030",
 }
 
 
