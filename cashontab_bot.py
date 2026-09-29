@@ -274,6 +274,25 @@ def _find_item_row(page):
     _fail(page, "לא נמצאה שורת פריט להזנת הפריט הבא")
 
 
+def _confirm_item_not_from_supplier(page, timeout=1500):
+    """Best-effort: Cash On Tab pops "הפריט לא שייך לספק נוכחי, האם לקלוט
+    בכל זאת?" (item isn't linked to the current supplier, add anyway?) with
+    כן/לא right after an item code is looked up -- live run 2026-09-29
+    (פטרוטק, 7290011785444), where it sat over the grid and blocked the
+    row's שמור. Kateryna confirmed the bot should answer כן. Same
+    text-then-ant-modal-ancestor pattern as the post-save dialogs; a no-op
+    when the item already belongs to the supplier and no dialog shows."""
+    try:
+        prompt = page.locator(':text("הפריט לא שייך לספק נוכחי")').first
+        prompt.wait_for(state="visible", timeout=timeout)
+        prompt.locator(
+            "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' ant-modal ')][1]"
+        ).get_by_role("button", name="כן", exact=True).click(timeout=3000)
+        page.wait_for_timeout(300)
+    except PlaywrightTimeoutError:
+        pass
+
+
 def _fill_line_item(page, item):
     """LEAST VERIFIED PART OF THIS FILE. Items grid (tab פריטים): every item
     is actually a *pair* of <tr> rows -- the data row (קוד פריט, תיאור,
@@ -314,6 +333,7 @@ def _fill_line_item(page, item):
         code_input.press("Enter")
     except PlaywrightTimeoutError:
         _fail(page, f'לא נמצא שדה "קוד פריט" בשורה החדשה (פריט {item.get("code")})')
+    _confirm_item_not_from_supplier(page)
     # Enter alone was seen to not always trigger the lookup (תיאור/price
     # stayed empty) -- Kateryna confirmed the same search icon inside that
     # cell does the same thing, so click it too as a belt-and-suspenders
@@ -340,6 +360,9 @@ def _fill_line_item(page, item):
     except PlaywrightTimeoutError:
         pass
     page.wait_for_timeout(1000)
+    # The search-icon click above re-runs the lookup, which can raise the
+    # same "not this supplier's item" prompt again.
+    _confirm_item_not_from_supplier(page, timeout=500)
 
     # כמות has no real <label> (same issue as מספר תעודת ספק earlier) --
     # get_by_label timed out against it live 2026-08-27, and a dynamic
