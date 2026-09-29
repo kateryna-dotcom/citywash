@@ -38,6 +38,10 @@ SUPPLIER_CASHONTAB_SEARCH_OVERRIDES = {
     # SUPPLIER_CASHONTAB_NAMES -- searching that name returned zero matches
     # live (confirmed by Kateryna 2026-08-27). Search by code instead.
     "victoriascent.co.il": "5",
+    # "פטרוטק בע\"מ" (a guess from the invoice PDF) returned zero matches
+    # live 2026-09-29 -- Kateryna confirmed its ספק code in Cash On Tab is
+    # 50030.
+    "invoice-one.com": "50030",
 }
 
 
