@@ -293,43 +293,19 @@ def _confirm_item_not_from_supplier(page, timeout=1500):
         pass
 
 
-def _fill_line_item(page, item):
-    """LEAST VERIFIED PART OF THIS FILE. Items grid (tab פריטים): every item
-    is actually a *pair* of <tr> rows -- the data row (קוד פריט, תיאור,
-    כמות, prices, ...) immediately followed by a second, full-width הערה
-    לפריט (item note) row. Two live runs confirmed this the hard way: using
-    the last <tr> as the data row silently filled the item code into הערה
-    לפריט instead of קוד פריט (fill() doesn't error just because it hit the
-    "wrong" input). So the data row is the *second-to-last* <tr>, not the
-    last. A single empty pair (#0) already exists as soon as the tab opens
-    -- there is no "+"/add-row button (confirmed by Kateryna 2026-08-27).
-    Type the item code directly into the data row's קוד פריט input and
-    press Enter -- not a search-picker dialog like מחסן/ספק (confirmed by
-    Kateryna) -- which auto-fills תיאור and a default price, and is assumed
-    (unconfirmed) to open a new empty row-pair below for the next item.
-    Then set כמות (best-effort -- see below) and click the row's own שמור
-    button to confirm it -- distinct from the document-level צור מסמך at
-    the very end of enter_invoice (confirmed by Kateryna: שמור sits next to
-    per-row grid/delete icons, screenshot 2026-08-27). מחיר לפני מע"מ is
-    left as Cash On Tab's own default -- Kateryna confirmed 2026-08-27 the
-    invoice's unit_price should NOT overwrite it.
-
-    Row targeting: a fixed nth(-2) (second-to-last <tr>) broke on the
-    *second* item -- Kateryna confirmed live 2026-08-27 that קוד פריט still
-    showed the *previous* item's code, meaning we were re-editing item 1's
-    now-saved row instead of a fresh one (its שמור button was then also
-    gone, matching the exact next error we'd been seeing). Requiring that
-    row's קוד פריט to be empty (see _find_item_row) fixed that, but broke
-    again on later items once Cash On Tab stopped appending fresh empty
-    rows -- so _find_item_row now just returns the last data row
-    regardless of its content, and this function explicitly clears קוד
-    פריט before typing into it (Kateryna's fix, 2026-08-27), instead of
-    relying on the row already being empty."""
-    row = _find_item_row(page)
+def _row_code(code_input):
     try:
-        code_input = row.locator("input").first
+        return code_input.input_value(timeout=2000).strip()
+    except PlaywrightTimeoutError:
+        return ""
+
+
+def _lookup_item_code(page, row, code_input, item):
+    """Types item["code"] into the edit row's קוד פריט and triggers Cash On
+    Tab's lookup (auto-fills תיאור and the default price)."""
+    try:
         code_input.fill("", timeout=_TIMEOUT_MS)
-        code_input.fill(item["code"], timeout=_TIMEOUT_MS)
+        code_input.fill(str(item["code"]), timeout=_TIMEOUT_MS)
         code_input.press("Enter")
     except PlaywrightTimeoutError:
         _fail(page, f'לא נמצא שדה "קוד פריט" בשורה החדשה (פריט {item.get("code")})')
@@ -363,6 +339,56 @@ def _fill_line_item(page, item):
     # The search-icon click above re-runs the lookup, which can raise the
     # same "not this supplier's item" prompt again.
     _confirm_item_not_from_supplier(page, timeout=500)
+
+
+def _fill_line_item(page, item):
+    """LEAST VERIFIED PART OF THIS FILE. Items grid (tab פריטים): every item
+    is actually a *pair* of <tr> rows -- the data row (קוד פריט, תיאור,
+    כמות, prices, ...) immediately followed by a second, full-width הערה
+    לפריט (item note) row. Two live runs confirmed this the hard way: using
+    the last <tr> as the data row silently filled the item code into הערה
+    לפריט instead of קוד פריט (fill() doesn't error just because it hit the
+    "wrong" input). So the data row is the *second-to-last* <tr>, not the
+    last. A single empty pair (#0) already exists as soon as the tab opens
+    -- there is no "+"/add-row button (confirmed by Kateryna 2026-08-27).
+    Type the item code directly into the data row's קוד פריט input and
+    press Enter -- not a search-picker dialog like מחסן/ספק (confirmed by
+    Kateryna) -- which auto-fills תיאור and a default price, and is assumed
+    (unconfirmed) to open a new empty row-pair below for the next item.
+    Then set כמות (best-effort -- see below) and click the row's own שמור
+    button to confirm it -- distinct from the document-level צור מסמך at
+    the very end of enter_invoice (confirmed by Kateryna: שמור sits next to
+    per-row grid/delete icons, screenshot 2026-08-27). מחיר לפני מע"מ is
+    left as Cash On Tab's own default -- Kateryna confirmed 2026-08-27 the
+    invoice's unit_price should NOT overwrite it.
+
+    Row targeting: a fixed nth(-2) (second-to-last <tr>) broke on the
+    *second* item -- Kateryna confirmed live 2026-08-27 that קוד פריט still
+    showed the *previous* item's code, meaning we were re-editing item 1's
+    now-saved row instead of a fresh one (its שמור button was then also
+    gone, matching the exact next error we'd been seeing). Requiring that
+    row's קוד פריט to be empty (see _find_item_row) fixed that, but broke
+    again on later items once Cash On Tab stopped appending fresh empty
+    rows -- so _find_item_row now just returns the last data row
+    regardless of its content, and this function explicitly clears קוד
+    פריט before typing into it (Kateryna's fix, 2026-08-27), instead of
+    relying on the row already being empty."""
+    row = _find_item_row(page)
+    code_input = row.locator("input").first
+    # Live run 2026-09-29 (פטרוטק): item 3 (7290011785505) was saved with
+    # item 2's code (7290011785444) -- the edit row keeps the previously
+    # saved item's code after שמור, and the new code didn't take, so the
+    # row went out as a duplicate of item 2 (Cash On Tab then warned
+    # "פריט כפול בתעודה"). Never save a row without first confirming its
+    # קוד פריט really is this item's code: retry the lookup once, then fail.
+    for attempt in range(2):
+        _lookup_item_code(page, row, code_input, item)
+        if _row_code(code_input) == str(item["code"]):
+            break
+        page.wait_for_timeout(1000)
+    else:
+        _fail(page, f'קוד הפריט בשורה נשאר "{_row_code(code_input)}" במקום "{item["code"]}" -- ' +
+              'לא נשמר, כדי לא להזין פריט שגוי')
 
     # כמות has no real <label> (same issue as מספר תעודת ספק earlier) --
     # get_by_label timed out against it live 2026-08-27, and a dynamic
