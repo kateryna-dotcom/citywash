@@ -436,6 +436,29 @@ def enter_invoice(invoice: dict) -> dict:
             except PlaywrightTimeoutError:
                 _fail(page, 'בחרתי "ת.מ. רכש" אבל לא נמצא כפתור "צור מסמך" הראשוני (לפתיחת הטופס)')
 
+            # Live run 2026-09-29: this click went through without error but
+            # the form never opened -- the screenshot still showed the
+            # document-type selection page (ת.מ. רכש highlighted), so the
+            # "קוד עובד" lookup below failed with a misleading "search button
+            # not found". Wait for the form explicitly and, if it still
+            # isn't there and no document panel opened at all, press
+            # "צור מסמך" once more (only while the type-selection page's own
+            # button is the single one on the page, so this can never hit
+            # the in-form save button).
+            form_field = page.get_by_placeholder("קוד עובד")
+            try:
+                form_field.wait_for(state="visible", timeout=_TIMEOUT_MS)
+            except PlaywrightTimeoutError:
+                create_buttons = page.get_by_role("button", name="צור מסמך", exact=True)
+                if create_buttons.count() == 1:
+                    try:
+                        create_buttons.click(timeout=_TIMEOUT_MS)
+                        form_field.wait_for(state="visible", timeout=_TIMEOUT_MS)
+                    except PlaywrightTimeoutError:
+                        _fail(page, 'לחצתי "צור מסמך" (פעמיים) אבל טופס המסמך לא נפתח')
+                else:
+                    _fail(page, 'לחצתי "צור מסמך" אבל שדה "קוד עובד" לא הופיע בטופס')
+
             # This click already created a real, persisted document (with
             # its own document number) before anything below is filled in
             # -- confirmed 2026-08-27, when Kateryna found a string of
