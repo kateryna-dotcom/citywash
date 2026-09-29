@@ -432,6 +432,10 @@ function renderCards(records) {
         </tfoot>
       </table>
       ${anyLowConf ? `<div style="margin-top:6px;color:var(--red);font-size:12.5px;">🔴 = הסכום (כמות × מחיר) לא תואם את הסכום בחשבונית — הפריט עדיין יוזן, בדוק/י את הסכום ולחצ/י "תיקנתי".</div>` : ""}
+      <div style="margin-top:6px;font-size:12.5px;color:#5b7186;">
+        חסרים פריטים או שהם משובשים?
+        <button class="toggle-raw" onclick="event.stopPropagation(); if (confirm('לפרש מחדש את הפריטים מה-PDF? תיקונים ידניים שנעשו בפריטים של חשבונית זו יימחקו.')) reparseInvoice(${r.id})" id="reparse-${r.id}">🔄 פרש מחדש</button>
+      </div>
       ` : `<div style="margin-top:8px;color:#5b7186;font-size:13px;">
           לא זוהו פריטים אוטומטית — ראה/י טקסט מקורי.
           <button class="toggle-raw" onclick="event.stopPropagation(); reparseInvoice(${r.id})" id="reparse-${r.id}">🔄 פרש מחדש</button>

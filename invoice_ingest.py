@@ -802,12 +802,25 @@ def parse_petrotech(text: str, pdf_bytes: bytes = None) -> list:
 # name. Revisit (dispatch on the actual supplier name from the PDF instead,
 # same as companies.detect_company already does by ח.פ regardless of
 # domain) if/when that happens.
+#
+# Second live fix 2026-09-29 (invoice 51399, 20 items, only 11 parsed and
+# most of those garbled): some product names end in a hyphen glued straight
+# onto the sku ("black-810624033427", "coco loco -810624033526"), and some
+# rows have no desc1 at all ("₪102.60 ₪5.70 729001384284 18 ..."). The old
+# `.+?\s+` desc1 required whitespace before the sku, so on those rows it
+# ran on across the following rows (DOTALL) until it found a spaced sku,
+# swallowing several items into one. desc1 now can't cross a ₪ or newline
+# (it's always on the row's own first line), and the sku only needs to not
+# be preceded by another digit.
 _BARCO_SCENTS_ROW_RE = re.compile(
     r'₪(?P<total>[\d,]+\.\d{2})\s*₪(?P<price>[\d,]+\.\d{2})\s*'
-    r'(?P<desc1>.+?)\s+(?P<sku>\d{8,14})\s+(?P<qty>\d+)\s+'
+    r'(?P<desc1>[^₪\n]*?)\s*(?<!\d)(?P<sku>\d{8,14})\s+(?P<qty>\d+)\s+'
     r'(?P<desc2>.+?)(?=₪|\Z)',
     re.DOTALL,
 )
+# Repeated table header at the top of every page after the first -- would
+# otherwise end up appended to the last item before a page break.
+_BARCO_SCENTS_PAGE_HEADER_RE = re.compile(r'\s*הופק ב\s*סה"כמחיר פירוטכמות מק"ט\s*')
 
 
 def parse_barco_scents(text: str, pdf_bytes: bytes = None) -> list:
@@ -815,7 +828,8 @@ def parse_barco_scents(text: str, pdf_bytes: bytes = None) -> list:
     for m in _BARCO_SCENTS_ROW_RE.finditer(text):
         qty, price, total = _num(m.group("qty")), _num(m.group("price")), _num(m.group("total"))
         confident = None not in (qty, price, total) and abs(round(qty * price, 2) - total) < 0.5
-        desc = m.group("desc1") + " " + re.sub(r"\s+", " ", m.group("desc2")).strip()
+        desc2 = _BARCO_SCENTS_PAGE_HEADER_RE.sub(" ", m.group("desc2"))
+        desc = m.group("desc1").strip() + " " + re.sub(r"\s+", " ", desc2).strip()
         items.append({
             "sku": m.group("sku"), "description": desc.strip(),
             "quantity": qty, "unit_price": price, "total": total, "confident": confident,
