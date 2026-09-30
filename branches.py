@@ -72,6 +72,9 @@ CASHONTAB_CODE_DISAMBIGUATION = {
     # Same for "כפר סבא" (codes 28 and 31) -- Kateryna confirmed
     # 2026-09-29 this branch is always code 31.
     "כפר סבא": "31",
+    # Same for "באר יעקב" (codes 9 and 23) -- Kateryna confirmed
+    # 2026-09-30 this branch is always code 23.
+    "באר יעקב": "23",
 }
 
 
