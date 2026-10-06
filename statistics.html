@@ -123,6 +123,7 @@
     <div>
       <button class="btn small" id="vatBtnExcl" onclick="setVatMode('excl')">ללא מע"מ</button>
       <button class="btn small secondary" id="vatBtnIncl" onclick="setVatMode('incl')">כולל מע"מ</button>
+      <button class="btn small secondary" onclick="exportToExcel()">⬇️ ייצוא לאקסל</button>
     </div>
   </div>
 
@@ -191,6 +192,7 @@
 
   <div class="tooltip" id="tooltip"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 // Same flat 18% VAT convention as /inventory (Kateryna confirmed against
 // real invoice data 2026-09-14) -- line_items totals are stored ללא מע"מ,
@@ -483,6 +485,79 @@ async function fetchSalesReport(btnEl) {
     btnEl.disabled = false;
     btnEl.textContent = originalText;
   }
+}
+
+// Exports exactly what's on screen -- same FILTERED array the tiles/charts
+// render from, so the branch/company/supplier/date filters already applied
+// above carry straight into the file (Kateryna 2026-10-06: wants a
+// downloadable אקסל report filterable by סניף/חברה/money spent, with the
+// ability to split by ספק). Reuses the same XLSX (SheetJS) CDN script
+// inventory.html and chat_ui.html already load for Excel import/export,
+// rather than adding a server round-trip or a new Python dependency.
+function exportToExcel() {
+  if (!FILTERED.length) { alert("אין נתונים לייצוא עם הסינון הנוכחי"); return; }
+
+  const detailRows = [["תאריך", "סניף", "חברה", "ספק", "מס' חשבונית", 'סכום ללא מע"מ', 'סכום כולל מע"מ']];
+  FILTERED.forEach(r => {
+    const total = invoiceItemsTotal(r);
+    detailRows.push([
+      recordDateStr(r) || "",
+      r.branch || "",
+      r.company || "",
+      SUPPLIER_NAMES[r.supplier_domain] || r.supplier_domain || "",
+      r.invoice_number || "",
+      Math.round(total),
+      Math.round(total * (1 + VAT_RATE)),
+    ]);
+  });
+
+  function summaryRows(keyFn, naLabel) {
+    const map = new Map();
+    FILTERED.forEach(r => {
+      const key = keyFn(r) || naLabel;
+      map.set(key, (map.get(key) || 0) + invoiceItemsTotal(r));
+    });
+    const rows = [["שם", 'סכום ללא מע"מ', 'סכום כולל מע"מ']];
+    [...map.entries()].sort((a, b) => b[1] - a[1]).forEach(([name, amount]) => {
+      rows.push([name, Math.round(amount), Math.round(amount * (1 + VAT_RATE))]);
+    });
+    return rows;
+  }
+
+  // Branch x supplier pivot -- the "split by ספק" piece: whatever
+  // branch/company/date filters are active above, this still breaks the
+  // resulting total down one level further by supplier.
+  const supplierName = r => SUPPLIER_NAMES[r.supplier_domain] || r.supplier_domain || "— ללא ספק —";
+  const branchName = r => r.branch || "— ללא סניף —";
+  const pivotTotals = new Map();
+  FILTERED.forEach(r => {
+    const key = branchName(r) + "\u0000" + supplierName(r);
+    pivotTotals.set(key, (pivotTotals.get(key) || 0) + invoiceItemsTotal(r));
+  });
+  const pivotBranches = [...new Set(FILTERED.map(branchName))].sort();
+  const pivotSuppliers = [...new Set(FILTERED.map(supplierName))].sort();
+  const pivotRows = [["סניף \\ ספק", ...pivotSuppliers, 'סה"כ']];
+  pivotBranches.forEach(b => {
+    let rowTotal = 0;
+    const row = [b];
+    pivotSuppliers.forEach(s => {
+      const amount = pivotTotals.get(b + "\u0000" + s) || 0;
+      rowTotal += amount;
+      row.push(amount ? Math.round(amount) : "");
+    });
+    row.push(Math.round(rowTotal));
+    pivotRows.push(row);
+  });
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detailRows), "פירוט חשבוניות");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows(branchName, "— ללא סניף —")), "לפי סניף");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows(supplierName, "— ללא ספק —")), "לפי ספק");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows(r => r.company, "— ללא חברה —")), "לפי חברה");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pivotRows), "סניף × ספק");
+
+  const today = new Date().toISOString().slice(0, 10);
+  XLSX.writeFile(wb, `דוח_מлАי_${today}.xlsx`);
 }
 
 async function loadSupplierNames() {
