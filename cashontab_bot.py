@@ -300,6 +300,59 @@ def _row_code(code_input):
         return ""
 
 
+def _resolve_item_picker(page, item, timeout=1500):
+    """Best-effort handling of the "בחירת פריט" (item picker) modal that the
+    קוד פריט lookup can open. Two cases seen live:
+
+    - 2026-09-23: the modal opened with a garbage search that matched
+      nothing -> just close it (Escape).
+    - 2026-10-14 (070382009953): the code is shared by several items (same
+      UPC -- e.g. "Black Ice" with קוד פריט 0070382009953 and "Summer
+      Breeze" with קוד פריט 070382009953), so the modal lists them all and
+      waits for a choice, blocking the row's שמור. Kateryna: pick the last
+      row. Prefer the row with a cell exactly equal to the code (here that
+      is also the last row), else the last row containing the code.
+    Rows that don't contain the code at all are never picked."""
+    try:
+        picker_title = page.locator(':text-is("בחירת פריט")').first
+        picker_title.wait_for(state="visible", timeout=timeout)
+    except PlaywrightTimeoutError:
+        return
+    modal = picker_title.locator(
+        "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' ant-modal ')][1]"
+    )
+    page.wait_for_timeout(500)  # let the results table render
+    code = str(item["code"])
+    rows = modal.locator("tbody tr", has_text=code)
+    target = None
+    try:
+        count = rows.count()
+    except PlaywrightTimeoutError:
+        count = 0
+    for i in range(count):
+        cells = rows.nth(i).locator("td")
+        for j in range(cells.count()):
+            try:
+                if cells.nth(j).inner_text(timeout=1000).strip() == code:
+                    target = rows.nth(i)
+                    break
+            except PlaywrightTimeoutError:
+                continue
+        if target is not None:
+            break
+    if target is None and count > 0:
+        target = rows.nth(count - 1)
+    if target is not None:
+        try:
+            target.get_by_role("button", name="בחר").click(timeout=3000)
+            page.wait_for_timeout(500)
+            return
+        except PlaywrightTimeoutError:
+            pass
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(300)
+
+
 def _lookup_item_code(page, row, code_input, item):
     """Types item["code"] into the edit row's קוד פריט and triggers Cash On
     Tab's lookup (auto-fills תיאור and the default price)."""
@@ -309,6 +362,7 @@ def _lookup_item_code(page, row, code_input, item):
         code_input.press("Enter")
     except PlaywrightTimeoutError:
         _fail(page, f'לא נמצא שדה "קוד פריט" בשורה החדשה (פריט {item.get("code")})')
+    _resolve_item_picker(page, item, timeout=1000)
     _confirm_item_not_from_supplier(page)
     # Enter alone was seen to not always trigger the lookup (תיאור/price
     # stayed empty) -- Kateryna confirmed the same search icon inside that
@@ -325,16 +379,8 @@ def _lookup_item_code(page, row, code_input, item):
     # item), but the search-icon click on top of that opened this modal
     # with an unrelated, garbage search value that matched nothing, which
     # then sat there blocking the row's own "שמור" button (the exact next
-    # failure seen: "לא נמצא כפתור שמור"). Best-effort close via Escape --
-    # if the modal never opened this is a harmless no-op, matching every
-    # other best-effort step in this function.
-    try:
-        picker_title = page.locator(':text-is("בחירת פריט")').first
-        picker_title.wait_for(state="visible", timeout=1500)
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(300)
-    except PlaywrightTimeoutError:
-        pass
+    # failure seen: "לא נמצא כפתור שמור"). See _resolve_item_picker.
+    _resolve_item_picker(page, item)
     page.wait_for_timeout(1000)
     # The search-icon click above re-runs the lookup, which can raise the
     # same "not this supplier's item" prompt again.
