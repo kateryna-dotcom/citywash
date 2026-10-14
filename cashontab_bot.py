@@ -305,7 +305,8 @@ def _resolve_item_picker(page, item, timeout=1500):
     קוד פריט lookup can open. Two cases seen live:
 
     - 2026-09-23: the modal opened with a garbage search that matched
-      nothing -> just close it (Escape).
+      nothing -> just close it (Escape). If instead it searched for our
+      own code and found nothing, the code isn't in Cash On Tab -> fail.
     - 2026-10-14 (070382009953): the code is shared by several items (same
       UPC -- e.g. "Black Ice" with קוד פריט 0070382009953 and "Summer
       Breeze" with קוד פריט 070382009953), so the modal lists them all and
@@ -349,6 +350,19 @@ def _resolve_item_picker(page, item, timeout=1500):
             return
         except PlaywrightTimeoutError:
             pass
+    # The picker searched for this very code and found nothing: the code
+    # doesn't exist in Cash On Tab at all -- live run 2026-10-14
+    # (0703802017248, a barcode typed by hand in the review screen and
+    # saved with "שמור בכל זאת"). Closing the picker would only end in a
+    # misleading "לא נמצא כפתור שמור", so stop here with the real reason.
+    if count == 0:
+        try:
+            searched = modal.locator("input").first.input_value(timeout=1000).strip()
+        except PlaywrightTimeoutError:
+            searched = ""
+        if searched == code:
+            _fail(page, f'קוד הפריט "{code}" לא קיים ב-Cash On Tab (חלון "בחירת פריט" לא מצא אותו) -- ' +
+                  'לתקן את ההתאמה של הפריט במסך הסקירה / ההתאמות')
     page.keyboard.press("Escape")
     page.wait_for_timeout(300)
 
