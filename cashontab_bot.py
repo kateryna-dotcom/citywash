@@ -300,6 +300,55 @@ def _row_code(code_input):
         return ""
 
 
+def _resolve_item_picker(page, item, timeout=1500):
+    """Best-effort: handles a "בחירת פריט" (item picker) modal left open
+    over the grid after the קוד פריט lookup. Two live cases:
+    - 2026-09-23: Enter had already resolved the item, and the modal held
+      an unrelated garbage search matching nothing -- just close it.
+    - 2026-10-25 (ביתן ספארק, 6923432583023): Enter did NOT resolve the
+      item (תיאור stayed empty); the modal *is* the lookup, listing exactly
+      one row with this code. Closing it via Escape left it open and the
+      row's שמור was blocked ("לא נמצא כפתור שמור"). Click that row's בחר.
+    Only a row with a cell exactly equal to the item's code is chosen
+    (קוד פריט or ברקוד); anything else is cancelled -- never guess."""
+    code = str(item["code"])
+    try:
+        title = page.locator(':text-is("בחירת פריט")').first
+        title.wait_for(state="visible", timeout=timeout)
+    except PlaywrightTimeoutError:
+        return
+    modal = title.locator(
+        "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' ant-modal ')][1]"
+    )
+    page.wait_for_timeout(800)  # let the picker's own search results render
+    rows = modal.locator("tbody tr", has_text=code)
+    for i in range(rows.count()):
+        row = rows.nth(i)
+        cells = row.locator("td")
+        try:
+            texts = [cells.nth(j).inner_text(timeout=1000).strip() for j in range(cells.count())]
+        except PlaywrightTimeoutError:
+            continue
+        if code in texts:
+            try:
+                row.get_by_role("button", name="בחר").click(timeout=3000)
+                title.wait_for(state="hidden", timeout=5000)
+                page.wait_for_timeout(500)
+                return
+            except PlaywrightTimeoutError:
+                break
+    # No exact match (or choosing failed): close the picker without choosing.
+    try:
+        modal.get_by_role("button", name="ביטול").click(timeout=2000)
+    except PlaywrightTimeoutError:
+        page.keyboard.press("Escape")
+    try:
+        title.wait_for(state="hidden", timeout=3000)
+    except PlaywrightTimeoutError:
+        pass
+    page.wait_for_timeout(300)
+
+
 def _lookup_item_code(page, row, code_input, item):
     """Types item["code"] into the edit row's קוד פריט and triggers Cash On
     Tab's lookup (auto-fills תיאור and the default price)."""
@@ -319,22 +368,9 @@ def _lookup_item_code(page, row, code_input, item):
         row.locator(".anticon-search").first.click(timeout=2000)
     except PlaywrightTimeoutError:
         pass
-    # That click can open a full "בחירת פריט" (item picker) modal instead of
-    # just re-confirming the in-row lookup -- live run 2026-09-23: Enter had
-    # already resolved the item correctly (קוד 1080067 is a real, unique
-    # item), but the search-icon click on top of that opened this modal
-    # with an unrelated, garbage search value that matched nothing, which
-    # then sat there blocking the row's own "שמור" button (the exact next
-    # failure seen: "לא נמצא כפתור שמור"). Best-effort close via Escape --
-    # if the modal never opened this is a harmless no-op, matching every
-    # other best-effort step in this function.
-    try:
-        picker_title = page.locator(':text-is("בחירת פריט")').first
-        picker_title.wait_for(state="visible", timeout=1500)
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(300)
-    except PlaywrightTimeoutError:
-        pass
+    # That click (or Enter itself) can open a full "בחירת פריט" (item
+    # picker) modal -- see _resolve_item_picker.
+    _resolve_item_picker(page, item, timeout=2500)
     page.wait_for_timeout(1000)
     # The search-icon click above re-runs the lookup, which can raise the
     # same "not this supplier's item" prompt again.
@@ -414,6 +450,10 @@ def _fill_line_item(page, item):
     # 2026-08-27 the item's own default price should stand, no overwrite
     # from the invoice's unit_price.
     _QUANTITY_COL = 5
+    # The picker can also open late, after the lookup above already
+    # returned -- pick/close it before touching כמות, since choosing an
+    # item in it re-fills the row.
+    _resolve_item_picker(page, item, timeout=500)
     try:
         row.locator("td").nth(_QUANTITY_COL).locator("input").fill(str(item["quantity"]), timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
