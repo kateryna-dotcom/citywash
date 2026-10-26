@@ -48,6 +48,9 @@ SUPPLIER_DOMAINS = [
     "pavilion-spark.co.il",
     "victoriascent.co.il",
     "grow.security",
+    # גלאור בע"מ -- sends from bi@zbeda.com with the invoice PDF attached
+    # ("מסמך ממוחשב מחברת גלאור בע''מ ,מספר: I26..."), added 2026-10-26.
+    "zbeda.com",
 ]
 
 # Suppliers who deliver their invoice as a download LINK in the email body

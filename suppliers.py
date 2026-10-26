@@ -26,6 +26,7 @@ SUPPLIER_CASHONTAB_NAMES = {
     # supplier-aware instead of purely domain-based.
     "invoice-one.com": "פטרוטק בע\"מ",
     "morning.co": "ברקו סנטס בע\"מ",
+    "zbeda.com": "גלאור בע\"מ",
 }
 
 # Cash On Tab's own ספק search sometimes doesn't match SUPPLIER_CASHONTAB_NAMES
@@ -42,6 +43,8 @@ SUPPLIER_CASHONTAB_SEARCH_OVERRIDES = {
     # live 2026-09-29 -- Kateryna confirmed its ספק code in Cash On Tab is
     # 500030.
     "invoice-one.com": "500030",
+    # גלאור בע"מ -- ספק code 500019 in Cash On Tab (Kateryna 2026-10-26).
+    "zbeda.com": "500019",
 }
 
 
