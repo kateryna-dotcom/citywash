@@ -125,7 +125,18 @@ def _login(page, company, username, password):
     showed it pre-filled with a remembered value from Kateryna's own
     browser, which a fresh headless session won't have), so it's addressed
     by position -- the first input on the page -- rather than by label."""
-    page.goto(BASE_URL, timeout=_TIMEOUT_MS)
+    # Live run 2026-10-26: goto timed out at 15s waiting for the full
+    # "load" event (every image/script) on a slow Cash On Tab morning. The
+    # login inputs below are what we actually need, and each fill already
+    # waits for its own input -- so only wait for the DOM, allow longer,
+    # and retry once before giving up.
+    for attempt in range(2):
+        try:
+            page.goto(BASE_URL, timeout=45000, wait_until="domcontentloaded")
+            break
+        except PlaywrightTimeoutError:
+            if attempt == 1:
+                _fail(page, "האתר של Cash On Tab לא נטען (ניסיתי פעמיים, 45 שניות כל פעם) -- כנראה איטי כרגע, נסי שוב בעוד כמה דקות")
     try:
         page.locator("input").first.fill(str(company), timeout=_TIMEOUT_MS)
         page.get_by_placeholder("שם משתמש").fill(username, timeout=_TIMEOUT_MS)
