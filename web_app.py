@@ -116,19 +116,23 @@ def _backfill_reparse_barco_scents():
     parser in #82). Only replaces an invoice's items when the fixed parser
     finds MORE of them than are stored, so it's idempotent across restarts
     and never touches an invoice that was already complete (or one already
-    entered into Cash On Tab -- status 'ok' is skipped)."""
+    entered into Cash On Tab -- status 'ok' is skipped).
+
+    Also covers zbeda.com (גלאור בע"מ, 2026-10-26): invoices picked up
+    before its parser existed came in with no items at all."""
     fixed = 0
     for r in invoice_store.list_records(limit=1000):
-        if r.get("supplier_domain") != "morning.co" or r.get("status") != "needs_review":
+        domain = r.get("supplier_domain")
+        if domain not in ("morning.co", "zbeda.com") or r.get("status") != "needs_review":
             continue
         pdf_bytes = invoice_store.get_pdf_data(r["id"])
         new_items = invoice_ingest.parse_line_items(
-            "morning.co", r.get("raw_text") or "", pdf_bytes=pdf_bytes
+            domain, r.get("raw_text") or "", pdf_bytes=pdf_bytes
         ) or []
         if len(new_items) > len(r.get("line_items") or []):
             invoice_store.update_line_items(r["id"], new_items)
             fixed += 1
-    print(f"[startup] ברקו סנטס re-parse backfill: {fixed} invoice(s) updated")
+    print(f"[startup] ברקו סנטס / גלאור re-parse backfill: {fixed} invoice(s) updated")
 
 
 @app.on_event("startup")
