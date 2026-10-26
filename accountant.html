@@ -84,7 +84,7 @@
 </head>
 <body>
   <div class="top">
-    <h2>🧾 מנהלת חשבונות — חשבוניות לתשלום לפי ספק</h2>
+    <h2>🧾 מנהלת חשבונות — חשבוניות שטופלו, לתשלום לפי ספק</h2>
     <div class="actions">
       <button class="btn secondary" onclick="window.print()">🖨️ הדפסה</button>
       <button class="btn secondary" onclick="exportExcel()">⬇️ אקסל</button>
@@ -223,7 +223,7 @@ function render() {
 
   const el = document.getElementById("suppliers");
   if (!records.length) {
-    el.innerHTML = '<div class="empty">אין חשבוניות בטווח ובסינון שנבחרו.</div>';
+    el.innerHTML = '<div class="empty">אין חשבוניות שטופלו בטווח ובסינון שנבחרו.</div>';
     document.getElementById("grand").innerHTML = "";
     return;
   }
@@ -340,7 +340,9 @@ function clearFilters() {
     document.getElementById("suppliers").innerHTML = '<div class="empty">שגיאה בטעינה: ' + escapeHtml(await report.text()) + "</div>";
     return;
   }
-  RECORDS = await report.json();
+  // Only invoices already handled (טופל, status "ok") go to the bookkeeper
+  // -- anything still under review isn't confirmed yet (Kateryna 2026-10-26).
+  RECORDS = (await report.json()).filter(r => r.status === "ok");
   populateFilters();
   setThisMonth();
 })();
