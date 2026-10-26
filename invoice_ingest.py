@@ -864,6 +864,74 @@ def parse_barco_scents(text: str, pdf_bytes: bytes = None) -> list:
     return items
 
 
+# zbeda.com (גלאור בע"מ). Item table columns, right to left: מק"ט | ברקוד |
+# תאור מוצר | כמות | מחיר לצרכן | מחיר נטו | סה"כ לשורה, e.g.
+#   ACC25005 | *7290120382305* | קומפרסור חשמלי נטען נייד | 4.00 | 171.60 שח | 77.22 שח | 308.88
+# Built from a screenshot of a real invoice (I2600114988, 2026-10-26), not
+# yet from its extracted text -- so this doesn't assume a column order in
+# the extracted line. A row is any line with a *barcode*; its prices are
+# the decimals next to "שח", and qty/total are the two plain decimals,
+# assigned so that qty × מחיר נטו ≈ total (never the other way round,
+# e.g. 10 × 14.00 vs 14 × 10.00 is settled by which one carries שח).
+_GALOR_BARCODE_RE = re.compile(r"\*\s*(\d{6,14})\s*\*")
+_GALOR_SHEKEL_NUM_RE = re.compile(r'(\d[\d,]*\.\d{2})\s*(?:ש"?ח|ח"?ש)|(?:ש"?ח|ח"?ש)\s*(\d[\d,]*\.\d{2})')
+_GALOR_NUM_RE = re.compile(r"(?<![\d.])\d[\d,]*\.\d{2}(?![\d])")
+_GALOR_SKU_RE = re.compile(r"^[A-Z]{1,6}\d[A-Z0-9]*$")
+
+
+def _parse_galor_line(line: str):
+    bm = _GALOR_BARCODE_RE.search(line)
+    if not bm:
+        return None
+    prices = [_num(a or b) for a, b in _GALOR_SHEKEL_NUM_RE.findall(line)]
+    rest = _GALOR_SHEKEL_NUM_RE.sub(" ", line)
+    plain = [_num(x) for x in _GALOR_NUM_RE.findall(_GALOR_BARCODE_RE.sub(" ", rest))]
+    if len(plain) < 2 or not prices:
+        return None
+    best = None
+    for qty in plain:
+        for total in plain:
+            if qty is total:
+                continue
+            for price in prices:
+                err = abs(qty * price - total)
+                if best is None or err < best[0]:
+                    best = (err, qty, price, total)
+    _err, qty, price, total = best
+    tokens = line.split()
+    sku = next((t for t in (tokens[-1], tokens[0]) if _GALOR_SKU_RE.match(t)), None)
+    desc = _GALOR_BARCODE_RE.sub(" ", rest)
+    desc = _GALOR_NUM_RE.sub(" ", desc)
+    desc = desc.strip()
+    if sku:
+        # Only the edge token -- the same code can also appear inside the
+        # product name ("נורה 9006 HB4 51W" for sku HB4).
+        if desc.endswith(sku):
+            desc = desc[: -len(sku)]
+        elif desc.startswith(sku):
+            desc = desc[len(sku):]
+    return {
+        "sku": sku, "barcode": bm.group(1),
+        "description": re.sub(r"\s+", " ", desc).strip(),
+        "quantity": qty, "unit_price": price, "total": total,
+        "confident": abs(round(qty * price, 2) - total) < 0.5,
+    }
+
+
+def parse_galor(text: str, pdf_bytes: bytes = None) -> list:
+    sources = []
+    if pdf_bytes:
+        layout_text = _extract_pdf_text_layout(pdf_bytes)
+        if layout_text:
+            sources.append(layout_text)
+    sources.append(text or "")
+    for source in sources:
+        items = [it for it in (_parse_galor_line(l) for l in source.splitlines()) if it]
+        if items:
+            return items
+    return []
+
+
 _LINE_ITEM_PARSERS = {
     "emi-1.com": parse_emi,
     "moshaev-inv.com": parse_moshaev,
@@ -874,6 +942,7 @@ _LINE_ITEM_PARSERS = {
     "grow.security": parse_grow_security,
     "invoice-one.com": parse_petrotech,
     "morning.co": parse_barco_scents,
+    "zbeda.com": parse_galor,
 }
 
 
