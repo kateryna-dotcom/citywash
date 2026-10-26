@@ -344,33 +344,19 @@ def _resolve_item_picker(page, item, timeout=1500):
     guess); otherwise close the picker. A no-op when no picker shows."""
     code = str(item["code"])
     picker_title = page.locator(':text-is("בחירת פריט")').first
-    # Rows of the picker's results table: any <tr> with its own בחר button.
-    # Deliberately not scoped to an ".ant-modal" ancestor -- live run
-    # 2026-10-26 showed the same failure again after scoping it that way,
-    # so this picker evidently isn't built as an ant-modal. The grid row
-    # behind it has no בחר button, so it can never be picked by mistake.
-    pick_rows = page.locator("tr").filter(has=page.get_by_role("button", name="בחר", exact=True))
     try:
         picker_title.wait_for(state="visible", timeout=timeout)
     except PlaywrightTimeoutError:
-        if pick_rows.count() == 0:
-            return
+        return
     # Results load asynchronously (a spinner shows first) -- poll briefly.
     for _ in range(12):
-        rows = pick_rows.filter(has_text=code)
-        for i in range(rows.count()):
-            row = rows.nth(i)
-            cells = row.locator("td")
-            for j in range(cells.count()):
-                try:
-                    if cells.nth(j).inner_text(timeout=1000).strip() == code:
-                        row.get_by_role("button", name="בחר", exact=True).click(timeout=3000)
-                        page.wait_for_timeout(700)
-                        return
-                except PlaywrightTimeoutError:
-                    continue
+        if _click_picker_row_for_code(page, code):
+            page.wait_for_timeout(700)
+            return
         page.wait_for_timeout(500)
     # No exact match -- close it rather than pick something else.
+    global _last_picker_debug
+    _last_picker_debug = _picker_debug(page, code)
     page.keyboard.press("Escape")
     page.wait_for_timeout(300)
     try:
@@ -379,6 +365,96 @@ def _resolve_item_picker(page, item, timeout=1500):
             page.wait_for_timeout(300)
     except PlaywrightTimeoutError:
         pass
+
+
+# What _resolve_item_picker saw the last time it gave up on the picker --
+# appended to the שמור failure message so the next live failure says
+# exactly what was on screen instead of needing another guess.
+_last_picker_debug = ""
+
+
+def _visible(locator):
+    out = []
+    for i in range(locator.count()):
+        el = locator.nth(i)
+        try:
+            if el.is_visible():
+                out.append(el)
+        except PlaywrightTimeoutError:
+            continue
+    return out
+
+
+# Invisible bidi marks Cash On Tab may put next to numbers in RTL cells.
+_BIDI_RE = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+
+
+def _exact_code_cells(page, code):
+    """Visible <td> cells whose own text is exactly `code`. The grid row
+    behind the picker holds the code in an <input> (no text), so it never
+    counts here."""
+    cells = []
+    for td in _visible(page.locator("td").filter(has_text=code)):
+        try:
+            if _BIDI_RE.sub("", td.inner_text(timeout=1000)).strip() == code:
+                cells.append(td)
+        except PlaywrightTimeoutError:
+            continue
+    return cells
+
+
+def _pick_buttons(scope):
+    """The picker's בחר control, whether Cash On Tab renders it as a real
+    <button> or as a styled <a>/<span> (get_by_role alone missed it)."""
+    return _visible(scope.locator(':text-is("בחר")'))
+
+
+def _click_picker_row_for_code(page, code):
+    """Clicks בחר on the picker row whose cell is exactly `code`. Live run
+    2026-10-26 found no single <tr> holding both the code and its בחר --
+    Ant Design tables with a fixed action column render that column as a
+    *separate* <table>, so the row is split in two. Handled by, in order:
+    the same <tr>; the twin <tr> with the same data-row-key; and, only when
+    exactly one result row has the code AND exactly one בחר is on screen,
+    that one בחר."""
+    cells = _exact_code_cells(page, code)
+    # The code shows in both קוד פריט and ברקוד of the same row -- keep
+    # each <tr> once, so "exactly one result row" below means one row.
+    rows = []
+    for td in cells:
+        tr = td.locator("xpath=ancestor::tr[1]")
+        if not tr.count():
+            continue
+        handle = tr.first.element_handle()
+        if any(handle.evaluate("(a, b) => a === b", r.element_handle()) for r in rows):
+            continue
+        rows.append(tr.first)
+    for tr in rows:
+        buttons = _pick_buttons(tr)
+        if buttons:
+            buttons[0].click(timeout=3000)
+            return True
+        key = tr.get_attribute("data-row-key")
+        if key:
+            twin = _pick_buttons(page.locator(f'tr[data-row-key="{key}"]'))
+            if twin:
+                twin[0].click(timeout=3000)
+                return True
+    all_buttons = _pick_buttons(page)
+    if len(rows) == 1 and len(all_buttons) == 1:
+        all_buttons[0].click(timeout=3000)
+        return True
+    return False
+
+
+def _picker_debug(page, code):
+    try:
+        cells = _exact_code_cells(page, code)
+        buttons = _pick_buttons(page)
+        keys = [c.locator("xpath=ancestor::tr[1]").first.get_attribute("data-row-key") for c in cells]
+        return f"תאים עם הקוד: {len(cells)}, כפתורי בחר: {len(buttons)}, data-row-key: {keys}"
+    except Exception as e:  # noqa: BLE001
+        return f"debug failed: {e}"
 
 
 def _fill_line_item(page, item):
@@ -467,7 +543,8 @@ def _fill_line_item(page, item):
     except PlaywrightTimeoutError:
         picker_open = page.locator(':text-is("בחירת פריט")').first.is_visible()
         _fail(page, f'לא נמצא כפתור "שמור" לשורת הפריט {item.get("code")}' +
-              (' (חלון "בחירת פריט" נשאר פתוח ולא נמצאה בו שורה עם הקוד הזה בדיוק)' if picker_open else ''))
+              (f' (חלון "בחירת פריט" נשאר פתוח ולא נמצאה בו שורה עם הקוד הזה בדיוק; {_last_picker_debug})'
+               if picker_open else ''))
     # The same "not this supplier's item" prompt can also pop only once
     # שמור is clicked -- live run 2026-09-29 (פטרוטק, 7290011785505): the
     # prompt appeared after the row's שמור, the row stayed unsaved behind
