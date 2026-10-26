@@ -71,6 +71,7 @@ PENSION_HTML_PATH = os.path.join(BASE_DIR, "pension.html")
 INVENTORY_HTML_PATH = os.path.join(BASE_DIR, "inventory.html")
 MAPPINGS_HTML_PATH = os.path.join(BASE_DIR, "mappings.html")
 ACCOUNTANT_HTML_PATH = os.path.join(BASE_DIR, "accountant.html")
+REPORTS_HTML_PATH = os.path.join(BASE_DIR, "reports.html")
 
 # How often the background thread checks Gmail for new supplier invoices.
 INVOICE_POLL_INTERVAL_SECONDS = 15 * 60
@@ -317,6 +318,15 @@ def accountant_page(request: Request):
     if redirect:
         return redirect
     with open(ACCOUNTANT_HTML_PATH, encoding="utf-8") as f:
+        return f.read()
+
+
+@app.get("/reports", response_class=HTMLResponse)
+def reports_page(request: Request):
+    redirect = _require_page_auth(request)
+    if redirect:
+        return redirect
+    with open(REPORTS_HTML_PATH, encoding="utf-8") as f:
         return f.read()
 
 

@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>דוחות</title>
+<style>
+  :root {
+    --blue-dark: #0b4f8a; --blue: #1e6fb8; --blue-mid: #5b9bd5; --blue-light: #eaf3fb;
+    --border: #d9e6f0; --text: #1c2b39; --muted: #5b7186;
+    --up: #c0392b; --down: #1a8a4a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
+    background: #f4f8fb; color: var(--text); padding: 22px;
+  }
+  .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; flex-wrap: wrap; gap: 12px; }
+  .top h2 { margin: 0; color: var(--blue-dark); font-size: 19px; }
+  .filters {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    background: #fff; border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px; margin-bottom: 16px;
+  }
+  select, input[type=month] {
+    padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;
+    font-size: 14px; font-family: inherit; background: #fff;
+  }
+  label.f { font-size: 13px; color: var(--muted); }
+  .btn {
+    background: #fff; color: var(--blue); border: 1px solid var(--blue); border-radius: 8px;
+    padding: 7px 12px; font-size: 13.5px; cursor: pointer; font-weight: 600; font-family: inherit;
+  }
+  .btn.on { background: var(--blue); color: #fff; }
+
+  .tiles { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+  .tile { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; flex: 1; min-width: 180px; }
+  .tile .label { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  .tile .value { font-size: 24px; font-weight: 700; color: var(--blue-dark); font-variant-numeric: tabular-nums; }
+  .tile .value .chg { font-size: 22px; text-align: right; }
+
+  .card { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }
+  .card h3 { margin: 0 0 4px; font-size: 15px; color: var(--blue-dark); }
+  .card .sub { font-size: 12.5px; color: var(--muted); margin-bottom: 14px; }
+
+  /* One row = name | bar | value | change vs previous month */
+  .row {
+    display: grid; grid-template-columns: 210px 1fr 110px 120px; align-items: center;
+    gap: 10px; padding: 5px 0;
+  }
+  .row.company { cursor: pointer; border-radius: 6px; }
+  .row.company:hover { background: var(--blue-light); }
+  .name { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row.company .name { font-weight: 600; }
+  .caret { display: inline-block; width: 14px; color: var(--muted); font-size: 11px; transition: transform .15s; }
+  .open > .row.company .caret { transform: rotate(-90deg); }
+  .track { height: 20px; position: relative; }
+  .bar { height: 100%; background: var(--blue); border-radius: 4px 0 0 4px; min-width: 2px; }
+  .row.branch .track { height: 14px; }
+  .row.branch .bar { background: var(--blue-mid); }
+  .row.branch .name { padding-inline-start: 22px; color: var(--text); font-size: 13px; }
+  .val { font-size: 13px; font-weight: 600; text-align: left; direction: ltr; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .chg { font-size: 12.5px; font-weight: 600; white-space: nowrap; text-align: left; direction: ltr; font-variant-numeric: tabular-nums; }
+  .chg.up { color: var(--up); }
+  .chg.down { color: var(--down); }
+  .chg.flat, .chg.na { color: var(--muted); font-weight: 500; }
+  .branches { display: none; padding-bottom: 6px; border-bottom: 1px dashed var(--border); margin-bottom: 4px; }
+  .open > .branches { display: block; }
+  .head { font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-bottom: 4px; }
+  .empty { text-align: center; color: var(--muted); padding: 40px 20px; }
+  .legend-note { font-size: 12px; color: var(--muted); margin-top: 12px; }
+
+  .tooltip {
+    position: fixed; background: var(--text); color: #fff; font-size: 12.5px;
+    padding: 6px 10px; border-radius: 6px; pointer-events: none; z-index: 100;
+    display: none; white-space: nowrap; line-height: 1.5;
+  }
+
+  @media (max-width: 700px) {
+    body { padding: 12px; }
+    .row { grid-template-columns: 110px 1fr 84px 70px; gap: 6px; }
+    .val, .chg { font-size: 11.5px; }
+  }
+</style>
+</head>
+<body>
+  <div class="top">
+    <h2>📊 דוחות — הוצאות על הזמנות</h2>
+  </div>
+
+  <div class="filters">
+    <label class="f">חודש: <input type="month" id="month" onchange="render()"></label>
+    <button class="btn" onclick="shiftMonth(-1)">‹ חודש קודם</button>
+    <button class="btn" onclick="shiftMonth(1)">חודש הבא ›</button>
+    <span class="f" style="margin-inline-start:8px;">סכומים:</span>
+    <button class="btn on" id="vatExcl" onclick="setVat(false)">ללא מע"מ</button>
+    <button class="btn" id="vatIncl" onclick="setVat(true)">כולל מע"מ</button>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="card">
+    <h3>הוצאות לפי חברה</h3>
+    <div class="sub" id="chartSub"></div>
+    <div class="row head">
+      <span>חברה / תחנה</span><span></span><span class="val" style="font-weight:500">סכום</span><span class="chg na">מול חודש קודם</span>
+    </div>
+    <div id="chart"></div>
+    <div class="legend-note">לחיצה על חברה פותחת פירוט לפי תחנה. ▲ אדום = הוצאה גבוהה יותר מהחודש הקודם, ▼ ירוק = נמוכה יותר. רק חשבוניות שטופלו; זיכויים מקטינים את הסכום.</div>
+  </div>
+
+  <div class="tooltip" id="tooltip"></div>
+
+<script>
+const VAT_RATE = 0.18;
+const NO_COMPANY = "— ללא חברה —";
+const NO_BRANCH = "— ללא תחנה —";
+let RECORDS = [];
+let withVat = false;
+const openCompanies = new Set();
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function money(n) {
+  const v = withVat ? n * (1 + VAT_RATE) : n;
+  return "₪" + v.toLocaleString("he-IL", { maximumFractionDigits: 0 });
+}
+function amount(r) {
+  let t = 0;
+  (r.line_items || []).forEach(it => { t += Number(it.total) || 0; });
+  return r.is_credit ? -Math.abs(t) : t;
+}
+function monthOf(r) {
+  if (!r.received_at) return "";
+  const d = new Date(r.received_at);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function prevMonth(ym) {
+  const [y, m] = ym.split("-").map(Number);
+  const d = new Date(y, m - 2, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function monthLabel(ym) {
+  const [y, m] = ym.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("he-IL", { month: "long", year: "numeric" });
+}
+
+// {company: {total, branches: {branch: total}}} for one month.
+function totals(ym) {
+  const out = new Map();
+  RECORDS.forEach(r => {
+    if (monthOf(r) !== ym) return;
+    const c = r.company || NO_COMPANY, b = r.branch || NO_BRANCH, a = amount(r);
+    if (!out.has(c)) out.set(c, { total: 0, branches: new Map() });
+    const e = out.get(c);
+    e.total += a;
+    e.branches.set(b, (e.branches.get(b) || 0) + a);
+  });
+  return out;
+}
+
+// Change vs previous month: arrow + percent. More spending = ▲ red.
+function changeHtml(now, before) {
+  if (!before) {
+    return now ? '<span class="chg na">חדש</span>' : '<span class="chg na">—</span>';
+  }
+  const pct = (now - before) / Math.abs(before) * 100;
+  if (Math.abs(pct) < 0.5) return '<span class="chg flat">= 0%</span>';
+  const up = pct > 0;
+  return `<span class="chg ${up ? "up" : "down"}" title="חודש קודם: ${escapeHtml(money(before))}">${up ? "▲" : "▼"} ${Math.abs(pct).toFixed(0)}%</span>`;
+}
+
+function barRow(cls, label, value, max, change, extra) {
+  const pct = max > 0 ? Math.max(value / max * 100, value > 0 ? 1 : 0) : 0;
+  return `<div class="row ${cls}" ${extra || ""}>
+    <span class="name" title="${escapeHtml(label)}">${cls === "company" ? '<span class="caret">◀</span>' : ""}${escapeHtml(label)}</span>
+    <span class="track"><span class="bar" style="display:block;width:${pct}%" data-tip="${escapeHtml(label)}|${escapeHtml(money(value))}"></span></span>
+    <span class="val">${money(value)}</span>
+    ${change}
+  </div>`;
+}
+
+function render() {
+  const ym = document.getElementById("month").value;
+  if (!ym) return;
+  const cur = totals(ym), prev = totals(prevMonth(ym));
+  const sum = m => [...m.values()].reduce((s, e) => s + e.total, 0);
+  const curTotal = sum(cur), prevTotal = sum(prev);
+  const invoices = RECORDS.filter(r => monthOf(r) === ym).length;
+
+  document.getElementById("chartSub").textContent =
+    `${monthLabel(ym)} · מול ${monthLabel(prevMonth(ym))} · ${withVat ? 'כולל מע"מ' : 'ללא מע"מ'}`;
+  document.getElementById("tiles").innerHTML = `
+    <div class="tile"><div class="label">סה"כ הוצאות — ${escapeHtml(monthLabel(ym))}</div><div class="value">${money(curTotal)}</div></div>
+    <div class="tile"><div class="label">מול חודש קודם (${escapeHtml(money(prevTotal))})</div><div class="value">${changeHtml(curTotal, prevTotal)}</div></div>
+    <div class="tile"><div class="label">מס' חשבוניות</div><div class="value">${invoices}</div></div>`;
+
+  const el = document.getElementById("chart");
+  if (!cur.size) { el.innerHTML = '<div class="empty">אין חשבוניות שטופלו בחודש הזה.</div>'; return; }
+
+  const companies = [...cur.entries()].sort((a, b) => b[1].total - a[1].total);
+  const max = Math.max(...companies.map(([, e]) => e.total), 0);
+  el.innerHTML = companies.map(([name, e], i) => {
+    const prevE = prev.get(name);
+    const branches = [...e.branches.entries()].sort((a, b) => b[1] - a[1]);
+    // Branch bars share the company scale so lengths stay comparable.
+    const branchRows = branches.map(([b, v]) =>
+      barRow("branch", b, v, max, changeHtml(v, prevE ? prevE.branches.get(b) || 0 : 0))).join("");
+    return `<div class="group ${openCompanies.has(name) ? "open" : ""}" data-company="${i}">
+      ${barRow("company", name, e.total, max, changeHtml(e.total, prevE ? prevE.total : 0), `onclick="toggle(${i})"`)}
+      <div class="branches">${branchRows}</div>
+    </div>`;
+  }).join("");
+  el.dataset.names = JSON.stringify(companies.map(([n]) => n));
+  attachTooltips(el);
+}
+
+function toggle(i) {
+  const name = JSON.parse(document.getElementById("chart").dataset.names)[i];
+  if (openCompanies.has(name)) openCompanies.delete(name); else openCompanies.add(name);
+  document.querySelector(`.group[data-company="${i}"]`).classList.toggle("open");
+}
+
+function attachTooltips(container) {
+  const tip = document.getElementById("tooltip");
+  container.querySelectorAll(".track").forEach(track => {
+    const bar = track.querySelector(".bar");
+    track.addEventListener("mousemove", e => {
+      const [label, value] = bar.dataset.tip.split("|");
+      tip.textContent = "";
+      const strong = document.createElement("strong");
+      strong.textContent = value;
+      tip.append(strong, document.createElement("br"), document.createTextNode(label));
+      tip.style.display = "block";
+      tip.style.left = (e.clientX + 14) + "px";
+      tip.style.top = (e.clientY + 14) + "px";
+    });
+    track.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+  });
+}
+
+function setVat(on) {
+  withVat = on;
+  document.getElementById("vatExcl").classList.toggle("on", !on);
+  document.getElementById("vatIncl").classList.toggle("on", on);
+  render();
+}
+function shiftMonth(delta) {
+  const input = document.getElementById("month");
+  const [y, m] = input.value.split("-").map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  input.value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  render();
+}
+
+(async function init() {
+  const now = new Date();
+  document.getElementById("month").value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const res = await fetch("/api/inventory/report");
+  if (!res.ok) {
+    document.getElementById("chart").innerHTML = '<div class="empty">שגיאה בטעינה: ' + escapeHtml(await res.text()) + "</div>";
+    return;
+  }
+  // Same rule as the מנהלת חשבונות tab: only invoices already handled (טופל).
+  RECORDS = (await res.json()).filter(r => r.status === "ok");
+  render();
+})();
+</script>
+</body>
+</html>
