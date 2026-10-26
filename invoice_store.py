@@ -67,12 +67,13 @@ def init_db():
             # (#72) -- same "^" start-anchor as the Python regex, so this
             # can't match a real חשבונית subject that merely mentions קבלה
             # later in the text. Extended 2026-10-26 for order confirmations
-            # (הזמנה) and purchase summaries (ריכוז רכישות) -- never a
+            # (הזמנה) and purchase summaries (ריכוז רכישות), and for
+            # ריצ'י שאיבות (pumping services, not stock) -- never a
             # subject mentioning זיכוי, which must stay visible.
             cur.execute(r"""
                 UPDATE invoice_records SET status='irrelevant', updated_at=now()
                 WHERE status IN ('needs_review', 'no_pdf_found')
-                  AND subject ~ 'העברה\s*(לבנק|בנקאית)|כרטסת|גיול\s*חוב|^\s*קבלה\y|^\s*הזמנה\y|ריכוז\s*רכישות'
+                  AND subject ~ 'העברה\s*(לבנק|בנקאית)|כרטסת|גיול\s*חוב|^\s*קבלה\y|^\s*הזמנה\y|ריכוז\s*רכישות|ריצ.?י\s*שאיבות'
                   AND subject !~ 'זיכוי'
             """)
         conn.commit()

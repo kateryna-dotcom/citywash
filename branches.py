@@ -101,7 +101,10 @@ def detect_branch(text: str) -> str | None:
         words = [w for w in branch.replace('"', "").split() if w]
         if not words:
             continue
-        if all(w in text for w in words):
+        # Invoices also spell קריית with a single yod ("קרית מלאכי" on
+        # גלאור's bill-to block, 2026-10-26).
+        spellings = [words, [w.replace("קריית", "קרית") for w in words]]
+        if any(all(w in text for w in ws) for ws in spellings):
             candidates.append(branch)
         elif len(words) > 1 and re.search(rf"סניף\s+{re.escape(words[0])}\b", text):
             # Some suppliers abbreviate a multi-word branch name to just its
@@ -117,6 +120,13 @@ def detect_branch(text: str) -> str | None:
     if not candidates:
         return None
     # Prefer the most specific (most words) match, e.g. "פתח תקווה מפגש
-    # השרון" over plain "פתח תקווה" if both technically match.
-    candidates.sort(key=lambda b: len(b.split()), reverse=True)
+    # השרון" over plain "פתח תקווה" if both technically match. Among equally
+    # specific ones, prefer a name that appears as one contiguous phrase --
+    # live 2026-10-26 (גלאור I2600114988): "בית דגן" matched word-by-word
+    # from item names ("לבית לבנדר", "סאן אוף דגן"), beating the real
+    # "חבצלת השרון" printed whole in the address.
+    def contiguous(b):
+        name = b.replace('"', "")
+        return name in text or name.replace("קריית", "קרית") in text
+    candidates.sort(key=lambda b: (len(b.split()), contiguous(b)), reverse=True)
     return candidates[0]
