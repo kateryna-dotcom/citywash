@@ -70,7 +70,6 @@ LOGIN_HTML_PATH = os.path.join(BASE_DIR, "login.html")
 PENSION_HTML_PATH = os.path.join(BASE_DIR, "pension.html")
 INVENTORY_HTML_PATH = os.path.join(BASE_DIR, "inventory.html")
 MAPPINGS_HTML_PATH = os.path.join(BASE_DIR, "mappings.html")
-STATISTICS_HTML_PATH = os.path.join(BASE_DIR, "statistics.html")
 
 # How often the background thread checks Gmail for new supplier invoices.
 INVOICE_POLL_INTERVAL_SECONDS = 15 * 60
@@ -308,15 +307,6 @@ def mappings_page(request: Request):
     if redirect:
         return redirect
     with open(MAPPINGS_HTML_PATH, encoding="utf-8") as f:
-        return f.read()
-
-
-@app.get("/statistics", response_class=HTMLResponse)
-def statistics_page(request: Request):
-    redirect = _require_page_auth(request)
-    if redirect:
-        return redirect
-    with open(STATISTICS_HTML_PATH, encoding="utf-8") as f:
         return f.read()
 
 
@@ -715,26 +705,33 @@ def inventory_list(request: Request, branch: str = None):
                 r["invoice_number"] = invoice_ingest.guess_invoice_number(
                     r.get("subject") or "", r.get("raw_text") or ""
                 )
+            r["is_credit"] = invoice_ingest.is_credit_note(r.get("subject"), r.get("raw_text"))
         return records
     except Exception as e:  # noqa: BLE001
         return Response(f"Error loading invoice records: {e}", status_code=500)
 
 
-@app.get("/api/inventory/stats")
-def inventory_stats(request: Request):
-    """Full-history, lightweight feed for the סטטיסטיקה tab: every invoice
-    she's marked as handled (status='ok'), with just enough per row (branch/
-    supplier/company/received_at/line_items) for the client to bucket spend
-    by month/branch/supplier/company itself -- same client-side aggregation
-    approach /inventory already uses for its monthly total, just over the
-    full history instead of one page."""
+@app.get("/api/inventory/report")
+def inventory_report(request: Request):
+    """Full-history feed for the מלאי tab's "⬇️ דוח אקסל" button: every
+    invoice and credit note (not just the 200 most recent /api/inventory/list
+    returns), with just the columns the report needs. The page applies its
+    own סניף/חברה/ספק/date filters to this client-side, same as its cards.
+    Credit notes (זיכוי) are included and flagged -- they never go into
+    Cash On Tab (see _ready_for_entry_shape) but do belong in the report."""
     unauthorized = _require_api_auth(request)
     if unauthorized:
         return unauthorized
     try:
-        return invoice_store.list_ok_records_for_stats()
+        records = invoice_store.list_records_for_report()
+        for r in records:
+            raw_text = r.pop("raw_text", None) or ""
+            if not r.get("invoice_number"):
+                r["invoice_number"] = invoice_ingest.guess_invoice_number(r.get("subject") or "", raw_text)
+            r["is_credit"] = invoice_ingest.is_credit_note(r.get("subject"), raw_text)
+        return records
     except Exception as e:  # noqa: BLE001
-        return Response(f"Error loading stats: {e}", status_code=500)
+        return Response(f"Error loading report: {e}", status_code=500)
 
 
 def _ready_for_entry_shape(r: dict) -> dict | None:
@@ -748,6 +745,10 @@ def _ready_for_entry_shape(r: dict) -> dict | None:
     if r["status"] != "needs_review" or not r.get("branch"):
         return None
     if r["branch"] in branches.NON_INVENTORY_CATEGORIES:
+        return None
+    # Credit notes (זיכוי) never go into Cash On Tab's מלאי -- Kateryna
+    # 2026-10-26. They still show in the report (/api/inventory/report).
+    if invoice_ingest.is_credit_note(r.get("subject"), r.get("raw_text")):
         return None
     entries = []
     for it in r.get("line_items") or []:
@@ -852,6 +853,8 @@ def inventory_auto_enter(record_id: int, request: Request):
     record = invoice_store.get_record(record_id)
     if not record:
         return Response("Invoice record not found", status_code=404)
+    if invoice_ingest.is_credit_note(record.get("subject"), record.get("raw_text")):
+        return Response("חשבונית זיכוי לא נכנסת למלאי", status_code=400)
     entry = _ready_for_entry_shape(record)
     if not entry:
         return Response("This invoice isn't ready for entry (branch/items not fully confirmed)", status_code=400)
@@ -1065,6 +1068,40 @@ async def inventory_resolve_item(record_id: int, item_index: int, request: Reque
     return {"status": "updated"}
 
 
+def _item_mapping_key(line_item: dict) -> str:
+    """The item_mappings key for a parsed line item: the supplier's own
+    sku/barcode, or the normalized description when the invoice prints no
+    מק"ט at all (item_matcher.description_key)."""
+    sku = item_matcher.clean_key(line_item.get("sku") or line_item.get("barcode") or "")
+    return sku or item_matcher.description_key(line_item.get("description") or "")
+
+
+def _apply_fix_to_other_open_invoices(supplier_domain: str, mapping_key: str,
+                                      updates: dict, record_id: int, item_index: int) -> int:
+    """A saved mapping used to only take effect on invoices ingested
+    *after* the fix -- the same product on another invoice already sitting
+    in the review list kept its old (wrong) match, so it looked like the
+    correction hadn't been remembered at all (Kateryna 2026-10-26). Applies
+    the same correction to every matching line on this supplier's other
+    open invoices right away. Returns how many lines were updated."""
+    if not mapping_key:
+        return 0
+    changed = 0
+    for rec in invoice_store.list_open_records_for_supplier(supplier_domain):
+        items = rec.get("line_items") or []
+        touched = False
+        for idx, it in enumerate(items):
+            if rec["id"] == record_id and idx == item_index:
+                continue
+            if _item_mapping_key(it) == mapping_key:
+                it.update(updates)
+                touched = True
+                changed += 1
+        if touched:
+            invoice_store.update_line_items(rec["id"], items)
+    return changed
+
+
 @app.post("/api/inventory/match-item/{record_id}/{item_index}")
 async def inventory_match_item(record_id: int, item_index: int, request: Request):
     """Resolves a line item the automatic matcher couldn't confidently
@@ -1104,18 +1141,20 @@ async def inventory_match_item(record_id: int, item_index: int, request: Request
     # the supplier's invoice has no מק"ט at all (see item_matcher.
     # description_key), so there's always something stable to save a
     # reusable mapping under.
-    sku = item_matcher.clean_key(line_item.get("sku") or line_item.get("barcode") or "")
-    mapping_key = sku or item_matcher.description_key(line_item.get("description") or "")
+    mapping_key = _item_mapping_key(line_item)
 
     try:
         if action == "skip":
             if mapping_key:
                 item_mapping_store.upsert_mapping(supplier_domain, mapping_key, "skip")
-            invoice_store.update_line_item(record_id, item_index, {
+            updates = {
                 "match_source": "skip", "needs_confirmation": False,
                 "matched_code": None, "matched_barcode": None, "matched_name": None,
-            })
-            return {"status": "updated", "match_source": "skip"}
+            }
+            invoice_store.update_line_item(record_id, item_index, updates)
+            also_updated = _apply_fix_to_other_open_invoices(
+                supplier_domain, mapping_key, updates, record_id, item_index)
+            return {"status": "updated", "match_source": "skip", "also_updated": also_updated}
 
         if action == "matched":
             if not barcode:
@@ -1138,12 +1177,16 @@ async def inventory_match_item(record_id: int, item_index: int, request: Request
                     catalog_code=catalog_code, catalog_name=catalog_name,
                     notes=None if item else "force-saved: not in the cashontab_catalog.json snapshot at save time",
                 )
-            invoice_store.update_line_item(record_id, item_index, {
+            updates = {
                 "match_source": "matched", "needs_confirmation": False,
                 "matched_code": catalog_code, "matched_barcode": item.get("barcode") if item else barcode,
                 "matched_name": catalog_name,
-            })
-            return {"status": "updated", "match_source": "matched", "matched_name": catalog_name}
+            }
+            invoice_store.update_line_item(record_id, item_index, updates)
+            also_updated = _apply_fix_to_other_open_invoices(
+                supplier_domain, mapping_key, updates, record_id, item_index)
+            return {"status": "updated", "match_source": "matched", "matched_name": catalog_name,
+                    "also_updated": also_updated}
 
         return Response('action must be "matched" or "skip"', status_code=400)
     except Exception as e:  # noqa: BLE001

@@ -74,10 +74,33 @@ _HEBREW_CHAR_RE = re.compile(r"[֐-׿]")
 # хשבוניות"). Anchored to the start of the subject, same as every real
 # קבלה subject seen so far, so this can't match a legitimate חשבונית
 # subject that merely mentions קבלה somewhere later in the text.
-_NON_INVOICE_SUBJECT_RE = re.compile(r"העברה\s*(לבנק|בנקאית)|כרטסת|גיול\s*חוב|^\s*קבלה\b")
+#
+# Extended 2026-10-26 (Kateryna: "רק חשבוניות וזיכוי"): hadarrosen.com's
+# branch order confirmations ("הזמנה לסניף נס ציונה") and pavilion-spark's
+# monthly purchase summaries ("ביתן ספארק - ריכוז רכישות ל-9.2026") aren't
+# invoices either. הזמנה is start-anchored like קבלה, so a real invoice
+# subject that merely mentions an order number later on still gets through.
+_NON_INVOICE_SUBJECT_RE = re.compile(
+    r"העברה\s*(לבנק|בנקאית)|כרטסת|גיול\s*חוב|^\s*קבלה\b|^\s*הזמנה\b|ריכוז\s*רכישות"
+)
+
+# Credit notes (חשבונית זיכוי / תעודת זיכוי) -- Kateryna 2026-10-26: these
+# must never be keyed into Cash On Tab's מלאי as a goods receipt, but still
+# belong in the downloadable Excel report alongside the invoices.
+_CREDIT_NOTE_RE = re.compile(r"זיכוי")
+
+
+def is_credit_note(subject: str, text: str = "") -> bool:
+    """True if the email subject or the invoice PDF's text mentions זיכוי.
+    Computed on the fly (not stored) so it applies to already-ingested
+    records too, without a backfill."""
+    return bool(_CREDIT_NOTE_RE.search(subject or "") or _CREDIT_NOTE_RE.search(text or ""))
 
 
 def _is_non_invoice_subject(subject: str) -> bool:
+    # A credit note is always kept, whatever else its subject says.
+    if is_credit_note(subject):
+        return False
     return bool(_NON_INVOICE_SUBJECT_RE.search(subject or ""))
 
 

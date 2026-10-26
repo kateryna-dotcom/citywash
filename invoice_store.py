@@ -66,11 +66,14 @@ def init_db():
             # arriving once the has:attachment query-grouping bug was fixed
             # (#72) -- same "^" start-anchor as the Python regex, so this
             # can't match a real חשבונית subject that merely mentions קבלה
-            # later in the text.
+            # later in the text. Extended 2026-10-26 for order confirmations
+            # (הזמנה) and purchase summaries (ריכוז רכישות) -- never a
+            # subject mentioning זיכוי, which must stay visible.
             cur.execute(r"""
                 UPDATE invoice_records SET status='irrelevant', updated_at=now()
                 WHERE status IN ('needs_review', 'no_pdf_found')
-                  AND subject ~ 'העברה\s*(לבנק|בנקאית)|כרטסת|גיול\s*חוב|^\s*קבלה\y'
+                  AND subject ~ 'העברה\s*(לבנק|בנקאית)|כרטסת|גיול\s*חוב|^\s*קבלה\y|^\s*הזמנה\y|ריכוז\s*רכישות'
+                  AND subject !~ 'זיכוי'
             """)
         conn.commit()
 
@@ -155,19 +158,35 @@ def list_records(branch: str = None, limit: int = 200) -> list:
             return [dict(r) for r in cur.fetchall()]
 
 
-def list_ok_records_for_stats() -> list:
-    """Lightweight rows (no raw_text/pdf_data/sender_email -- just what the
-    סטטיסטיקה tab's client-side spend aggregation needs) for every invoice
-    she's actually marked as handled (status='ok'). Deliberately unlimited,
-    unlike list_records()'s 200-row page cap, since a real "over time" trend
-    needs the full history, not just the most recent page."""
+def list_records_for_report() -> list:
+    """Every invoice/credit note (status <> 'irrelevant'), whatever its
+    review status, for the מלאי tab's Excel report -- deliberately
+    unlimited, unlike list_records()'s 200-row page cap, so a report over a
+    long date range isn't silently cut off. Includes raw_text only so the
+    caller can backfill a blank invoice_number / detect זיכוי; strip it
+    before sending to the client."""
     with _get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
-                SELECT id, branch, supplier_domain, company, received_at, line_items
-                FROM invoice_records WHERE status='ok'
+                SELECT id, branch, supplier_domain, company, received_at, line_items,
+                       invoice_number, subject, raw_text, status
+                FROM invoice_records WHERE status <> 'irrelevant'
                 ORDER BY received_at
             """)
+            return [dict(r) for r in cur.fetchall()]
+
+
+def list_open_records_for_supplier(supplier_domain: str) -> list:
+    """id + line_items of every not-yet-handled invoice from this supplier
+    -- used to apply an item correction Kateryna just made to the same
+    product on the other invoices still waiting in the review list."""
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, line_items FROM invoice_records
+                WHERE supplier_domain=%s AND status IN ('needs_review', 'no_pdf_found')
+                  AND line_items IS NOT NULL
+            """, (supplier_domain,))
             return [dict(r) for r in cur.fetchall()]
 
 

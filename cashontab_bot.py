@@ -320,25 +320,61 @@ def _lookup_item_code(page, row, code_input, item):
     except PlaywrightTimeoutError:
         pass
     # That click can open a full "בחירת פריט" (item picker) modal instead of
-    # just re-confirming the in-row lookup -- live run 2026-09-23: Enter had
-    # already resolved the item correctly (קוד 1080067 is a real, unique
-    # item), but the search-icon click on top of that opened this modal
-    # with an unrelated, garbage search value that matched nothing, which
-    # then sat there blocking the row's own "שמור" button (the exact next
-    # failure seen: "לא נמצא כפתור שמור"). Best-effort close via Escape --
-    # if the modal never opened this is a harmless no-op, matching every
-    # other best-effort step in this function.
-    try:
-        picker_title = page.locator(':text-is("בחירת פריט")').first
-        picker_title.wait_for(state="visible", timeout=1500)
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(300)
-    except PlaywrightTimeoutError:
-        pass
+    # just re-confirming the in-row lookup -- see _resolve_item_picker.
+    _resolve_item_picker(page, item, timeout=1500)
     page.wait_for_timeout(1000)
     # The search-icon click above re-runs the lookup, which can raise the
     # same "not this supplier's item" prompt again.
     _confirm_item_not_from_supplier(page, timeout=500)
+
+
+def _resolve_item_picker(page, item, timeout=1500):
+    """Best-effort handling of Cash On Tab's "בחירת פריט" (item picker)
+    modal, which can open over the grid after the קוד פריט lookup and then
+    blocks the row's own "שמור" button.
+
+    Live run 2026-09-23: it opened with an unrelated, garbage search value
+    that matched nothing -- closing it (Escape) was right there. Live run
+    2026-10-26 (ביתן ספארק, 6923432583023): it opened with the item's own
+    code already searched and exactly one matching row, and the in-row
+    lookup had NOT resolved on its own (תיאור empty) -- Escape didn't close
+    it and the run failed on "לא נמצא כפתור שמור". So: if a row in the
+    picker has a cell exactly equal to this item's code, click its בחר
+    (the same exact-code rule as _pick_unique_search_result -- never a
+    guess); otherwise close the picker. A no-op when no picker shows."""
+    code = str(item["code"])
+    try:
+        picker_title = page.locator(':text-is("בחירת פריט")').first
+        picker_title.wait_for(state="visible", timeout=timeout)
+    except PlaywrightTimeoutError:
+        return
+    modal = picker_title.locator(
+        "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' ant-modal ')][1]"
+    )
+    # Results load asynchronously (a spinner shows first) -- poll briefly.
+    for _ in range(10):
+        rows = modal.locator("tr", has_text=code)
+        for i in range(rows.count()):
+            row = rows.nth(i)
+            cells = row.locator("td")
+            for j in range(cells.count()):
+                try:
+                    if cells.nth(j).inner_text(timeout=1000).strip() == code:
+                        row.get_by_role("button", name="בחר").click(timeout=3000)
+                        page.wait_for_timeout(500)
+                        return
+                except PlaywrightTimeoutError:
+                    continue
+        page.wait_for_timeout(500)
+    # No exact match -- close it rather than pick something else.
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(300)
+    try:
+        if picker_title.is_visible():
+            modal.get_by_role("button", name="ביטול").click(timeout=2000)
+            page.wait_for_timeout(300)
+    except PlaywrightTimeoutError:
+        pass
 
 
 def _fill_line_item(page, item):
@@ -419,6 +455,9 @@ def _fill_line_item(page, item):
     except PlaywrightTimeoutError:
         pass
 
+    # The picker can also open late (after the code check above) and sit
+    # over שמור -- give it one more chance to be resolved/closed.
+    _resolve_item_picker(page, item, timeout=500)
     try:
         row.get_by_role("button", name="שמור").click(timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
