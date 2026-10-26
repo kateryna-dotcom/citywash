@@ -535,16 +535,27 @@ def _fill_line_item(page, item):
     except PlaywrightTimeoutError:
         pass
 
-    # The picker can also open late (after the code check above) and sit
-    # over שמור -- give it one more chance to be resolved/closed.
-    _resolve_item_picker(page, item, timeout=500)
-    try:
-        row.get_by_role("button", name="שמור").click(timeout=_TIMEOUT_MS)
-    except PlaywrightTimeoutError:
-        picker_open = page.locator(':text-is("בחירת פריט")').first.is_visible()
-        _fail(page, f'לא נמצא כפתור "שמור" לשורת הפריט {item.get("code")}' +
-              (f' (חלון "בחירת פריט" נשאר פתוח ולא נמצאה בו שורה עם הקוד הזה בדיוק; {_last_picker_debug})'
-               if picker_open else ''))
+    # The picker can also open late and sit over שמור -- live run
+    # 2026-10-26: the failure message showed the picker open while
+    # _resolve_item_picker had seen nothing (empty debug), i.e. it opened
+    # only after the כמות fill above (likely the code cell's blur
+    # re-running the lookup). So resolve it right before שמור, and if the
+    # click is still blocked by it, resolve once more and retry.
+    global _last_picker_debug
+    _last_picker_debug = ""
+    picker_title = page.locator(':text-is("בחירת פריט")').first
+    for attempt in range(3):
+        _resolve_item_picker(page, item, timeout=2000 if attempt == 0 else 5000)
+        try:
+            row.get_by_role("button", name="שמור").click(timeout=5000 if attempt < 2 else _TIMEOUT_MS)
+            break
+        except PlaywrightTimeoutError:
+            if attempt < 2 and picker_title.is_visible():
+                continue
+            picker_open = picker_title.is_visible()
+            _fail(page, f'לא נמצא כפתור "שמור" לשורת הפריט {item.get("code")}' +
+                  (f' (חלון "בחירת פריט" נשאר פתוח ולא נמצאה בו שורה עם הקוד הזה בדיוק; {_last_picker_debug})'
+                   if picker_open else ''))
     # The same "not this supplier's item" prompt can also pop only once
     # שמור is clicked -- live run 2026-09-29 (פטרוטק, 7290011785505): the
     # prompt appeared after the row's שמור, the row stayed unsaved behind
