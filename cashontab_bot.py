@@ -125,7 +125,18 @@ def _login(page, company, username, password):
     showed it pre-filled with a remembered value from Kateryna's own
     browser, which a fresh headless session won't have), so it's addressed
     by position -- the first input on the page -- rather than by label."""
-    page.goto(BASE_URL, timeout=_TIMEOUT_MS)
+    # Live run 2026-10-26: goto timed out at 15s waiting for the full
+    # "load" event (every image/script) on a slow Cash On Tab morning. The
+    # login inputs below are what we actually need, and each fill already
+    # waits for its own input -- so only wait for the DOM, allow longer,
+    # and retry once before giving up.
+    for attempt in range(2):
+        try:
+            page.goto(BASE_URL, timeout=45000, wait_until="domcontentloaded")
+            break
+        except PlaywrightTimeoutError:
+            if attempt == 1:
+                _fail(page, "האתר של Cash On Tab לא נטען (ניסיתי פעמיים, 45 שניות כל פעם) -- כנראה איטי כרגע, נסי שוב בעוד כמה דקות")
     try:
         page.locator("input").first.fill(str(company), timeout=_TIMEOUT_MS)
         page.get_by_placeholder("שם משתמש").fill(username, timeout=_TIMEOUT_MS)
@@ -444,15 +455,56 @@ def _click_picker_row_for_code(page, code):
     if len(rows) == 1 and len(all_buttons) == 1:
         all_buttons[0].click(timeout=3000)
         return True
+    # Last resort, independent of how the table is built: scan what's
+    # actually rendered on screen. If the exact code is visible somewhere
+    # and exactly one visible "בחר" exists, click that one by its on-screen
+    # position (a real mouse click). Still never a guess -- with zero or
+    # several בחר on screen this does nothing.
+    info = _scan_screen(page, code)
+    if info["codes"] >= 1 and len(info["picks"]) == 1:
+        pick = info["picks"][0]
+        page.mouse.click(pick["x"], pick["y"])
+        return True
     return False
+
+
+# Runs in the page: visible innermost elements whose text is exactly the
+# code / exactly "בחר", with their on-screen centre.
+_SCAN_JS = r"""(code) => {
+  const clean = t => (t || '').replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').trim();
+  const visible = e => {
+    const r = e.getBoundingClientRect(), st = getComputedStyle(e);
+    return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none';
+  };
+  const innermost = (e, text) => ![...e.children].some(c => clean(c.innerText) === text);
+  const find = text => [...document.querySelectorAll('body *')]
+    .filter(e => clean(e.innerText) === text && innermost(e, text) && visible(e));
+  return {
+    codes: find(code).length,
+    picks: find('בחר').map(e => {
+      const r = e.getBoundingClientRect();
+      return {tag: e.tagName, cls: String(e.className || '').slice(0, 40),
+              x: r.x + r.width / 2, y: r.y + r.height / 2};
+    }),
+  };
+}"""
+
+
+def _scan_screen(page, code):
+    try:
+        return page.evaluate(_SCAN_JS, code)
+    except Exception:  # noqa: BLE001
+        return {"codes": 0, "picks": []}
 
 
 def _picker_debug(page, code):
     try:
         cells = _exact_code_cells(page, code)
         buttons = _pick_buttons(page)
-        keys = [c.locator("xpath=ancestor::tr[1]").first.get_attribute("data-row-key") for c in cells]
-        return f"תאים עם הקוד: {len(cells)}, כפתורי בחר: {len(buttons)}, data-row-key: {keys}"
+        info = _scan_screen(page, code)
+        picks = [f'{p["tag"]}.{p["cls"]}' for p in info["picks"]]
+        return (f"תאים עם הקוד: {len(cells)}, כפתורי בחר: {len(buttons)}, "
+                f"על המסך: קוד×{info['codes']}, בחר={picks}, frames={len(page.frames)}")
     except Exception as e:  # noqa: BLE001
         return f"debug failed: {e}"
 
@@ -553,8 +605,11 @@ def _fill_line_item(page, item):
             if attempt < 2 and picker_title.is_visible():
                 continue
             picker_open = picker_title.is_visible()
-            _fail(page, f'לא נמצא כפתור "שמור" לשורת הפריט {item.get("code")}' +
-                  (f' (חלון "בחירת פריט" נשאר פתוח ולא נמצאה בו שורה עם הקוד הזה בדיוק; {_last_picker_debug})'
+            # Computed fresh here rather than relying on _resolve_item_picker
+            # having filled it in -- it came back empty twice live.
+            debug = _picker_debug(page, str(item["code"])) if picker_open else ""
+            _fail(page, f'[v5] לא נמצא כפתור "שמור" לשורת הפריט {item.get("code")}' +
+                  (f' (חלון "בחירת פריט" נשאר פתוח ולא נמצאה בו שורה עם הקוד הזה בדיוק; {debug})'
                    if picker_open else ''))
     # The same "not this supplier's item" prompt can also pop only once
     # שמור is clicked -- live run 2026-09-29 (פטרוטק, 7290011785505): the
