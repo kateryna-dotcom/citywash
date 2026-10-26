@@ -53,6 +53,7 @@
   .badge.needs-review { background: var(--red); color: #fff; }
   .badge.ok { background: var(--green); color: #fff; }
   .badge.no-pdf { background: #999; color: #fff; }
+  .badge.credit { background: #a86a00; color: #fff; }
   .raw-text {
     display: none; margin-top: 12px; background: #f8fafc; border: 1px solid var(--border);
     border-radius: 8px; padding: 12px; font-size: 12.5px; white-space: pre-wrap;
@@ -151,6 +152,7 @@
       </label>
       <button class="btn secondary" onclick="clearFilters()">נקה סינון</button>
       <button class="btn secondary" onclick="checkNow()">🔄 בדוק עכשיו</button>
+      <button class="btn secondary" onclick="exportReport(this)">⬇️ דוח אקסל</button>
       <span id="statusMsg" class="status-msg"></span>
     </div>
   </div>
@@ -355,12 +357,19 @@ function invoiceItemsTotal(r) {
   return total;
 }
 
+// Signed amount for totals/report: a זיכוי (credit note) reduces what was
+// spent, whether or not its parser already printed the lines as negative.
+function signedTotal(r) {
+  const total = invoiceItemsTotal(r);
+  return r.is_credit ? -Math.abs(total) : total;
+}
+
 function renderSummary(records) {
   const bar = document.getElementById("summaryBar");
   if (!RAW_RECORDS.length) { bar.innerHTML = ""; return; }
 
   let shownTotal = 0;
-  records.forEach(r => { shownTotal += invoiceItemsTotal(r); });
+  records.forEach(r => { shownTotal += signedTotal(r); });
 
   // Current calendar month, only invoices she's actually marked as handled
   // (טופל -- status "ok") -- not ones still sitting in review, per her
@@ -375,7 +384,7 @@ function renderSummary(records) {
     return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
   });
   let monthTotal = 0;
-  monthRecords.forEach(r => { monthTotal += invoiceItemsTotal(r); });
+  monthRecords.forEach(r => { monthTotal += signedTotal(r); });
 
   bar.innerHTML = `
     מציג <strong>${records.length}</strong> חשבוניות מתוך ${RAW_RECORDS.length} &nbsp;·&nbsp;
@@ -455,6 +464,7 @@ function renderCards(records) {
           </div>
         </div>
         <div class="card-top-right">
+          ${r.is_credit ? `<span class="badge credit" title="חשבונית זיכוי — לא נכנסת למלאי, מופיעה בדוח האקסל">זיכוי — לא למלאי</span>` : ""}
           <span class="badge ${isReview ? 'needs-review' : (r.status === 'ok' ? 'ok' : 'no-pdf')}">${escapeHtml(badgeLabel)}</span>
           <button class="card-delete-btn" title="מחק/י חשבונית זו" onclick="event.stopPropagation(); deleteRecord(${r.id})">✕</button>
         </div>
@@ -475,7 +485,7 @@ function renderCards(records) {
         </select>
         ${isReview ? `
           <button class="btn small" onclick="markOk(${r.id})">✓ סימנתי כטופל</button>
-          <button class="btn small secondary" onclick="autoEnter(${r.id}, this)">🤖 הכנס למלאי אוטומטית</button>
+          ${r.is_credit ? "" : `<button class="btn small secondary" onclick="autoEnter(${r.id}, this)">🤖 הכנס למלאי אוטומטית</button>`}
         ` : r.status === "ok" ? `
           <button class="btn small secondary" onclick="revertToReview(${r.id})" title="השתמש/י אם סומן כטופל בטעות, או שהמסמך בקאש און טאב לא הושלם/בוטל בפועל">↺ החזר לבדיקה</button>
         ` : ""}
@@ -749,6 +759,64 @@ function syncCatalogFile(file) {
     }
   };
   reader.readAsArrayBuffer(file);
+}
+
+// Same סניף/חברה/ספק/date filters as the cards above, but run over the full
+// history from /api/inventory/report (the card list is capped at the 200
+// most recent invoices). Credit notes (זיכוי) are included, as negative
+// amounts, even though they never go into Cash On Tab.
+async function exportReport(btnEl) {
+  const originalText = btnEl.textContent;
+  btnEl.disabled = true;
+  btnEl.textContent = "מכין דוח...";
+  try {
+    const res = await fetch("/api/inventory/report");
+    if (!res.ok) { alert("שגיאה בטעינת הדוח: " + (await res.text())); return; }
+    let records = await res.json();
+    const supplier = document.getElementById("supplierFilter").value;
+    const dateFrom = document.getElementById("dateFrom").value;
+    const dateTo = document.getElementById("dateTo").value;
+    const invoiceNumberQuery = document.getElementById("invoiceNumberFilter").value.trim();
+    if (selectedBranches.size) records = records.filter(r => selectedBranches.has(r.branch));
+    if (selectedCompanies.size) records = records.filter(r => selectedCompanies.has(r.company));
+    if (supplier) records = records.filter(r => r.supplier_domain === supplier);
+    if (dateFrom) records = records.filter(r => { const d = recordDateStr(r); return d && d >= dateFrom; });
+    if (dateTo) records = records.filter(r => { const d = recordDateStr(r); return d && d <= dateTo; });
+    if (invoiceNumberQuery) records = records.filter(r => (r.invoice_number || "").includes(invoiceNumberQuery));
+    if (!records.length) { alert("אין נתונים לייצוא עם הסינון הנוכחי"); return; }
+
+    const round2 = n => Math.round(n * 100) / 100;
+    const rows = [["ספק", "תאריך", "מס' חשבונית", "סוג מסמך", "סניף", "חברה", 'סכום ללא מע"מ', 'סכום כולל מע"מ', "סטטוס"]];
+    let sum = 0;
+    records.forEach(r => {
+      const amount = signedTotal(r);
+      sum += amount;
+      rows.push([
+        SUPPLIER_NAMES[r.supplier_domain] || r.supplier_domain || "",
+        recordDateStr(r) || "",
+        r.invoice_number || "",
+        r.is_credit ? "זיכוי" : "חשבונית",
+        r.branch || "",
+        r.company || "",
+        round2(amount),
+        round2(amount * (1 + VAT_RATE)),
+        r.status === "ok" ? "טופל" : "לבדיקה",
+      ]);
+    });
+    rows.push(['סה"כ', "", "", "", "", "", round2(sum), round2(sum * (1 + VAT_RATE)), ""]);
+
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws["!cols"] = [{ wch: 24 }, { wch: 12 }, { wch: 16 }, { wch: 10 }, { wch: 18 }, { wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 10 }];
+    const wb = XLSX.utils.book_new();
+    wb.Workbook = { Views: [{ RTL: true }] };
+    XLSX.utils.book_append_sheet(wb, ws, "חשבוניות");
+    XLSX.writeFile(wb, `דוח_מלאי_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  } catch (e) {
+    alert("שגיאה ביצירת הדוח: " + e);
+  } finally {
+    btnEl.disabled = false;
+    btnEl.textContent = originalText;
+  }
 }
 
 function clearFilters() {
