@@ -56,6 +56,10 @@ _INVOICE_NUMBER_RE = re.compile(
 # parsing at all.
 _TRANSACTION_NUMBER_RE = re.compile(r"עסקה\s*[:\-]?\s*(\d+)")
 
+# zbeda.com (גלאור בע"מ): "מסמך ממוחשב מחברת גלאור בע''מ ,מספר: I2600114989"
+# -- no "חשבונית מס" label at all, the number just follows "מספר:".
+_COMPUTERIZED_DOC_NUMBER_RE = re.compile(r"מסמך ממוחשב.*?מספר\s*:\s*([A-Za-z]?\d+)")
+
 _HEBREW_CHAR_RE = re.compile(r"[֐-׿]")
 
 # moshaev-inv.com's finance mailbox (Simona) sends more than invoices from
@@ -960,6 +964,9 @@ def guess_invoice_number(subject: str, text: str, pdf_bytes: bytes = None) -> st
             return m.group(0)
         # grow.security -- see _TRANSACTION_NUMBER_RE's comment.
         m = _TRANSACTION_NUMBER_RE.search(source)
+        if m:
+            return m.group(1).strip()
+        m = _COMPUTERIZED_DOC_NUMBER_RE.search(source)
         if m:
             return m.group(1).strip()
     # Last resort: re-extract via pdftotext -layout, which (unlike pypdf's
