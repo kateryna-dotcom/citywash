@@ -84,8 +84,13 @@ _HEBREW_CHAR_RE = re.compile(r"[֐-׿]")
 # monthly purchase summaries ("ביתן ספארק - ריכוז רכישות ל-9.2026") aren't
 # invoices either. הזמנה is start-anchored like קבלה, so a real invoice
 # subject that merely mentions an order number later on still gets through.
+#
+# "ריצ'י שאיבות" (pumping services, sends via the same morning.co platform
+# as ברקו סנטס: "חשבונית מס 52944 - ריצ'י שאיבות") -- not a stock supplier,
+# Kateryna 2026-10-26: "они мне не нужны тут вообще".
 _NON_INVOICE_SUBJECT_RE = re.compile(
     r"העברה\s*(לבנק|בנקאית)|כרטסת|גיול\s*חוב|^\s*קבלה\b|^\s*הזמנה\b|ריכוז\s*רכישות"
+    r"|ריצ.?י\s*שאיבות"
 )
 
 # Credit notes (חשבונית זיכוי / תעודת זיכוי) -- Kateryna 2026-10-26: these
@@ -864,52 +869,56 @@ def parse_barco_scents(text: str, pdf_bytes: bytes = None) -> list:
     return items
 
 
-# zbeda.com (גלאור בע"מ). Item table columns, right to left: מק"ט | ברקוד |
-# תאור מוצר | כמות | מחיר לצרכן | מחיר נטו | סה"כ לשורה, e.g.
-#   ACC25005 | *7290120382305* | קומפרסור חשמלי נטען נייד | 4.00 | 171.60 שח | 77.22 שח | 308.88
-# Built from a screenshot of a real invoice (I2600114988, 2026-10-26), not
-# yet from its extracted text -- so this doesn't assume a column order in
-# the extracted line. A row is any line with a *barcode*; its prices are
-# the decimals next to "שח", and qty/total are the two plain decimals,
-# assigned so that qty × מחיר נטו ≈ total (never the other way round,
-# e.g. 10 × 14.00 vs 14 × 10.00 is settled by which one carries שח).
-_GALOR_BARCODE_RE = re.compile(r"\*\s*(\d{6,14})\s*\*")
-_GALOR_SHEKEL_NUM_RE = re.compile(r'(\d[\d,]*\.\d{2})\s*(?:ש"?ח|ח"?ש)|(?:ש"?ח|ח"?ש)\s*(\d[\d,]*\.\d{2})')
-_GALOR_NUM_RE = re.compile(r"(?<![\d.])\d[\d,]*\.\d{2}(?![\d])")
+# zbeda.com (גלאור בע"מ, Priority-generated PDF). Item table columns, right
+# to left: מק"ט | ברקוד | תאור מוצר | כמות | מחיר לצרכן | מחיר נטו | סה"כ לשורה.
+# Real pypdf text of invoice I2600114989 (2026-10-26) puts each row on one
+# line, numbers first, with the shekel sign glued to the *next* number and
+# only a trailing asterisk on the barcode:
+#   246.60 שח6.85 שח18.33 36.00פחית קליפורניה לבית מבשם כביסה091400032210* ACC37575
+#   (total)   (net)  (retail)(qty) (description)          (barcode)     (sku)
+# The numbers that carry "שח" are the total and the net price; qty never
+# does. So qty is picked from the plain numbers and the price from the שח
+# ones, with qty × price ≈ total -- independent of column order.
+#
+# The PDF holds the invoice twice, "מקור" then "העתק" -- only the part
+# before the copy's header is read, or every item would come in twice.
+_GALOR_BARCODE_RE = re.compile(r"\*?\s*(\d{6,14})\s*\*")
+_GALOR_SHEKEL_NUM_RE = re.compile(r'(\d[\d,]*\.\d{2})\s*(?:ש"?ח|ח"?ש)')
+_GALOR_NUM_RE = re.compile(r"(?<![\d.,])\d[\d,]*\.\d{2}(?![\d])")
 _GALOR_SKU_RE = re.compile(r"^[A-Z]{1,6}\d[A-Z0-9]*$")
+_GALOR_COPY_HEADER_RE = re.compile(r"^.*העתק.*חשבונית|^.*חשבונית.*העתק", re.MULTILINE)
 
 
 def _parse_galor_line(line: str):
     bm = _GALOR_BARCODE_RE.search(line)
     if not bm:
         return None
-    prices = [_num(a or b) for a, b in _GALOR_SHEKEL_NUM_RE.findall(line)]
-    rest = _GALOR_SHEKEL_NUM_RE.sub(" ", line)
-    plain = [_num(x) for x in _GALOR_NUM_RE.findall(_GALOR_BARCODE_RE.sub(" ", rest))]
-    if len(plain) < 2 or not prices:
+    before_barcode = line[:bm.start()]
+    shekel = [_num(x) for x in _GALOR_SHEKEL_NUM_RE.findall(line)]
+    numbers = [_num(x) for x in _GALOR_NUM_RE.findall(before_barcode)]
+    plain = [n for n in numbers if n not in shekel]
+    if not shekel or not plain:
         return None
     best = None
     for qty in plain:
-        for total in plain:
-            if qty is total:
-                continue
-            for price in prices:
+        for price in shekel:
+            for total in numbers:
+                if total is qty or total is price:
+                    continue
                 err = abs(qty * price - total)
                 if best is None or err < best[0]:
                     best = (err, qty, price, total)
+    if best is None:
+        return None
     _err, qty, price, total = best
     tokens = line.split()
-    sku = next((t for t in (tokens[-1], tokens[0]) if _GALOR_SKU_RE.match(t)), None)
-    desc = _GALOR_BARCODE_RE.sub(" ", rest)
+    sku = tokens[-1] if tokens and _GALOR_SKU_RE.match(tokens[-1]) else None
+    if not sku and tokens and _GALOR_SKU_RE.match(tokens[0]):
+        sku = tokens[0]
+    # Description: what's left before the barcode once the numbers and
+    # shekel signs are gone.
+    desc = re.sub(r'ש"?ח|ח"?ש', " ", before_barcode)
     desc = _GALOR_NUM_RE.sub(" ", desc)
-    desc = desc.strip()
-    if sku:
-        # Only the edge token -- the same code can also appear inside the
-        # product name ("נורה 9006 HB4 51W" for sku HB4).
-        if desc.endswith(sku):
-            desc = desc[: -len(sku)]
-        elif desc.startswith(sku):
-            desc = desc[len(sku):]
     return {
         "sku": sku, "barcode": bm.group(1),
         "description": re.sub(r"\s+", " ", desc).strip(),
@@ -918,15 +927,20 @@ def _parse_galor_line(line: str):
     }
 
 
+def _galor_original_part(text: str) -> str:
+    m = _GALOR_COPY_HEADER_RE.search(text)
+    return text[:m.start()] if m else text
+
+
 def parse_galor(text: str, pdf_bytes: bytes = None) -> list:
-    sources = []
+    sources = [text or ""]
     if pdf_bytes:
         layout_text = _extract_pdf_text_layout(pdf_bytes)
         if layout_text:
             sources.append(layout_text)
-    sources.append(text or "")
     for source in sources:
-        items = [it for it in (_parse_galor_line(l) for l in source.splitlines()) if it]
+        lines = _galor_original_part(source).splitlines()
+        items = [it for it in (_parse_galor_line(l) for l in lines) if it]
         if items:
             return items
     return []
