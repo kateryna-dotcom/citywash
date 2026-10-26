@@ -362,7 +362,29 @@ def _resolve_item_picker(page, item, timeout=1500):
     # Results load asynchronously (a spinner shows first) -- poll briefly.
     for _ in range(12):
         if _click_picker_row_for_code(page, code):
-            page.wait_for_timeout(700)
+            # Live [v5] run 2026-10-26: one בחר on screen, the code visible,
+            # yet the picker was still open at the end -- so check whether
+            # the click actually closed it, and if not escalate (double-click
+            # the code's row, then Enter), logging each step for the error.
+            page.wait_for_timeout(1500)
+            if not picker_title.is_visible():
+                _picker_log.append("בחר✓")
+                return
+            _picker_log.append("בחר→עדיין פתוח")
+            cells = _exact_code_cells(page, code)
+            if cells:
+                try:
+                    cells[0].dblclick(timeout=3000)
+                except PlaywrightTimeoutError:
+                    pass
+                page.wait_for_timeout(1500)
+                if not picker_title.is_visible():
+                    _picker_log.append("dblclick✓")
+                    return
+                _picker_log.append("dblclick→עדיין פתוח")
+            page.keyboard.press("Enter")
+            page.wait_for_timeout(1500)
+            _picker_log.append("Enter✓" if not picker_title.is_visible() else "Enter→עדיין פתוח")
             return
         page.wait_for_timeout(500)
     # No exact match -- close it rather than pick something else.
@@ -382,6 +404,9 @@ def _resolve_item_picker(page, item, timeout=1500):
 # appended to the שמור failure message so the next live failure says
 # exactly what was on screen instead of needing another guess.
 _last_picker_debug = ""
+# Step-by-step log of what _resolve_item_picker did during the current
+# item, for the failure message.
+_picker_log = []
 
 
 def _visible(locator):
@@ -595,6 +620,7 @@ def _fill_line_item(page, item):
     # click is still blocked by it, resolve once more and retry.
     global _last_picker_debug
     _last_picker_debug = ""
+    _picker_log.clear()
     picker_title = page.locator(':text-is("בחירת פריט")').first
     for attempt in range(3):
         _resolve_item_picker(page, item, timeout=2000 if attempt == 0 else 5000)
@@ -608,7 +634,9 @@ def _fill_line_item(page, item):
             # Computed fresh here rather than relying on _resolve_item_picker
             # having filled it in -- it came back empty twice live.
             debug = _picker_debug(page, str(item["code"])) if picker_open else ""
-            _fail(page, f'[v5] לא נמצא כפתור "שמור" לשורת הפריט {item.get("code")}' +
+            if picker_open:
+                debug += f", צעדים: {' / '.join(_picker_log) or 'אין'}"
+            _fail(page, f'[v6] לא נמצא כפתור "שמור" לשורת הפריט {item.get("code")}' +
                   (f' (חלון "בחירת פריט" נשאר פתוח ולא נמצאה בו שורה עם הקוד הזה בדיוק; {debug})'
                    if picker_open else ''))
     # The same "not this supplier's item" prompt can also pop only once
