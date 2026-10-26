@@ -384,20 +384,44 @@ def _resolve_item_picker(page, item, timeout=1500):
                 _picker_log.append("dblclick→עדיין פתוח")
             page.keyboard.press("Enter")
             page.wait_for_timeout(1500)
-            _picker_log.append("Enter✓" if not picker_title.is_visible() else "Enter→עדיין פתוח")
+            if not picker_title.is_visible():
+                _picker_log.append("Enter✓")
+                return
+            _picker_log.append("Enter→עדיין פתוח")
+            # [v6] live run: none of the three closed it. Close it with
+            # ביטול / the X instead and let _fill_line_item check whether
+            # the row resolved on its own (תיאור filled) before saving.
+            _close_picker(page, picker_title)
             return
         page.wait_for_timeout(500)
     # No exact match -- close it rather than pick something else.
     global _last_picker_debug
     _last_picker_debug = _picker_debug(page, code)
+    _close_picker(page, picker_title)
+
+
+def _close_picker(page, picker_title):
+    """Closes the "בחירת פריט" picker without choosing anything: Escape,
+    then its ביטול button, then the X in its header. Logs what worked."""
     page.keyboard.press("Escape")
-    page.wait_for_timeout(300)
-    try:
-        if picker_title.is_visible():
-            page.get_by_role("button", name="ביטול", exact=True).last.click(timeout=2000)
-            page.wait_for_timeout(300)
-    except PlaywrightTimeoutError:
-        pass
+    page.wait_for_timeout(500)
+    if not picker_title.is_visible():
+        _picker_log.append("Escape✓")
+        return
+    for label, locator in (
+        ("ביטול", page.get_by_role("button", name="ביטול", exact=True)),
+        ("X", page.locator(".ant-modal-close, [aria-label='Close'], [aria-label='close']")),
+    ):
+        for el in reversed(_visible(locator)):
+            try:
+                el.click(timeout=2000)
+            except PlaywrightTimeoutError:
+                continue
+            page.wait_for_timeout(700)
+            if not picker_title.is_visible():
+                _picker_log.append(f"{label}✓")
+                return
+    _picker_log.append("סגירה→עדיין פתוח")
 
 
 # What _resolve_item_picker saw the last time it gave up on the picker --
@@ -534,6 +558,19 @@ def _picker_debug(page, code):
         return f"debug failed: {e}"
 
 
+def _row_description(row):
+    """The edit row's תיאור (column 2) -- filled by Cash On Tab once the
+    item code lookup really resolved. Empty string if not."""
+    try:
+        cell = row.locator("td").nth(2)
+        inp = cell.locator("input, textarea")
+        if inp.count():
+            return inp.first.input_value(timeout=2000).strip()
+        return cell.inner_text(timeout=2000).strip()
+    except PlaywrightTimeoutError:
+        return ""
+
+
 def _fill_line_item(page, item):
     """LEAST VERIFIED PART OF THIS FILE. Items grid (tab פריטים): every item
     is actually a *pair* of <tr> rows -- the data row (קוד פריט, תיאור,
@@ -624,6 +661,13 @@ def _fill_line_item(page, item):
     picker_title = page.locator(':text-is("בחירת פריט")').first
     for attempt in range(3):
         _resolve_item_picker(page, item, timeout=2000 if attempt == 0 else 5000)
+        # Only when the picker was involved for this item -- items that
+        # never raised it keep the exact behaviour that already worked.
+        if _picker_log and not picker_title.is_visible() and not _row_description(row):
+            # The picker was closed without choosing, and Cash On Tab never
+            # filled the item in -- saving now would save an empty line.
+            _fail(page, f'[v7] הפריט {item.get("code")} לא זוהה ב-Cash On Tab (תיאור נשאר ריק אחרי סגירת חלון "בחירת פריט") '
+                  f'-- כנראה יש יותר מפריט אחד עם הקוד/ברקוד הזה. צעדים: {" / ".join(_picker_log) or "אין"}')
         try:
             row.get_by_role("button", name="שמור").click(timeout=5000 if attempt < 2 else _TIMEOUT_MS)
             break
@@ -636,7 +680,7 @@ def _fill_line_item(page, item):
             debug = _picker_debug(page, str(item["code"])) if picker_open else ""
             if picker_open:
                 debug += f", צעדים: {' / '.join(_picker_log) or 'אין'}"
-            _fail(page, f'[v6] לא נמצא כפתור "שמור" לשורת הפריט {item.get("code")}' +
+            _fail(page, f'[v7] לא נמצא כפתור "שמור" לשורת הפריט {item.get("code")}' +
                   (f' (חלון "בחירת פריט" נשאר פתוח ולא נמצאה בו שורה עם הקוד הזה בדיוק; {debug})'
                    if picker_open else ''))
     # The same "not this supplier's item" prompt can also pop only once
