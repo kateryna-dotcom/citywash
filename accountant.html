@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>מנהלת חשבונות</title>
+<style>
+  :root {
+    --blue-dark: #0b4f8a; --blue: #1e6fb8; --blue-light: #eaf3fb;
+    --border: #d9e6f0; --text: #1c2b39; --muted: #5b7186; --red: #d92b2b;
+    --amber: #a86a00;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
+    background: #f4f8fb; color: var(--text); padding: 22px;
+  }
+  .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; flex-wrap: wrap; gap: 12px; }
+  .top h2 { margin: 0; color: var(--blue-dark); font-size: 19px; }
+  .filters {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    background: #fff; border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px; margin-bottom: 16px;
+  }
+  select, input[type=date] {
+    padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;
+    font-size: 14px; font-family: inherit; background: #fff;
+  }
+  label.f { font-size: 13px; color: var(--muted); }
+  .btn {
+    background: var(--blue); color: #fff; border: none; border-radius: 8px; padding: 8px 14px;
+    font-size: 14px; cursor: pointer; font-weight: 600; font-family: inherit;
+  }
+  .btn:hover { background: var(--blue-dark); }
+  .btn.secondary { background: #fff; color: var(--blue); border: 1px solid var(--blue); }
+  .summary { font-size: 14px; color: var(--muted); margin-bottom: 14px; }
+  .summary strong { color: var(--blue-dark); }
+
+  .supplier {
+    background: #fff; border: 1px solid var(--border); border-radius: 10px;
+    margin-bottom: 16px; overflow: hidden; break-inside: avoid;
+  }
+  .supplier-head {
+    display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px;
+    background: var(--blue-light); padding: 10px 16px; border-bottom: 1px solid var(--border);
+  }
+  .supplier-name { font-weight: 700; font-size: 15.5px; color: var(--blue-dark); }
+  .supplier-email { font-size: 13px; color: var(--muted); direction: ltr; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: right; color: var(--muted); font-weight: 600; padding: 7px 12px; border-bottom: 1px solid var(--border); }
+  td { padding: 7px 12px; border-bottom: 1px solid var(--border); }
+  td.num, th.num { text-align: left; direction: ltr; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.credit td { color: var(--amber); }
+  tr.total td { font-weight: 700; background: #f8fafc; border-bottom: none; }
+  .tag { font-size: 11.5px; padding: 1px 7px; border-radius: 10px; background: #fff4e0; color: var(--amber); font-weight: 600; }
+  .company-picker {
+    padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px;
+    font-size: 12.5px; font-family: inherit; background: #fff; max-width: 200px;
+  }
+  .company-picker.unset { border-color: var(--red); color: var(--red); }
+  .company-print { display: none; }
+  .grand {
+    background: #fff; border: 2px solid var(--blue); border-radius: 10px;
+    padding: 14px 18px; display: flex; justify-content: space-between; align-items: center;
+    font-size: 16px; font-weight: 700; color: var(--blue-dark); flex-wrap: wrap; gap: 8px;
+  }
+  .empty { text-align: center; color: var(--muted); padding: 50px 20px; }
+  .print-title { display: none; }
+
+  @media (max-width: 640px) {
+    body { padding: 12px; }
+    th, td { padding: 6px 8px; }
+    .table-wrap { overflow-x: auto; }
+  }
+  @media print {
+    body { background: #fff; padding: 0; }
+    .filters, .top .actions { display: none; }
+    .print-title { display: block; font-size: 13px; color: var(--muted); margin-bottom: 10px; }
+    .company-picker { display: none; }
+    .company-print { display: inline; }
+    .supplier { border-color: #999; }
+  }
+</style>
+</head>
+<body>
+  <div class="top">
+    <h2>🧾 מנהלת חשבונות — חשבוניות לתשלום לפי ספק</h2>
+    <div class="actions">
+      <button class="btn secondary" onclick="window.print()">🖨️ הדפסה</button>
+      <button class="btn secondary" onclick="exportExcel()">⬇️ אקסל</button>
+    </div>
+  </div>
+
+  <div class="filters">
+    <label class="f">חברה לחיוב:
+      <select id="companyFilter" onchange="render()"></select>
+    </label>
+    <label class="f">ספק:
+      <select id="supplierFilter" onchange="render()"><option value="">כל הספקים</option></select>
+    </label>
+    <label class="f">מתאריך: <input type="date" id="dateFrom" onchange="render()"></label>
+    <label class="f">עד תאריך: <input type="date" id="dateTo" onchange="render()"></label>
+    <button class="btn secondary" onclick="setThisMonth()">החודש</button>
+    <button class="btn secondary" onclick="setLastMonth()">חודש קודם</button>
+    <button class="btn secondary" onclick="clearFilters()">נקה</button>
+  </div>
+
+  <div class="print-title" id="printTitle"></div>
+  <div class="summary" id="summary"></div>
+  <div id="suppliers"></div>
+  <div id="grand"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+// Same flat VAT rate as /inventory -- stored line_items totals are ללא מע"מ.
+const VAT_RATE = 0.18;
+const NO_COMPANY = "__none__";
+
+let RECORDS = [];
+let SUPPLIER_NAMES = {};
+let COMPANIES = [];
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function money(n) {
+  return "₪" + n.toLocaleString("he-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function dateStr(r) {
+  if (!r.received_at) return "";
+  const d = new Date(r.received_at);
+  const pad = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+function displayDate(iso) {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+}
+// A זיכוי reduces what's owed, whatever sign its parser gave the lines.
+function amount(r) {
+  let total = 0;
+  (r.line_items || []).forEach(it => { total += Number(it.total) || 0; });
+  return r.is_credit ? -Math.abs(total) : total;
+}
+function supplierName(domain) {
+  return SUPPLIER_NAMES[domain] || domain || "— ללא ספק —";
+}
+
+function populateFilters() {
+  const companySel = document.getElementById("companyFilter");
+  companySel.innerHTML = '<option value="">כל החברות</option>' +
+    COMPANIES.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("") +
+    `<option value="${NO_COMPANY}">— ללא חברה —</option>`;
+  const supplierSel = document.getElementById("supplierFilter");
+  const domains = [...new Set(RECORDS.map(r => r.supplier_domain).filter(Boolean))]
+    .sort((a, b) => supplierName(a).localeCompare(supplierName(b), "he"));
+  supplierSel.innerHTML = '<option value="">כל הספקים</option>' +
+    domains.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(supplierName(d))}</option>`).join("");
+}
+
+function filtered() {
+  const company = document.getElementById("companyFilter").value;
+  const supplier = document.getElementById("supplierFilter").value;
+  const from = document.getElementById("dateFrom").value;
+  const to = document.getElementById("dateTo").value;
+  return RECORDS.filter(r => {
+    if (company === NO_COMPANY ? r.company : (company && r.company !== company)) return false;
+    if (supplier && r.supplier_domain !== supplier) return false;
+    const d = dateStr(r);
+    if (from && (!d || d < from)) return false;
+    if (to && (!d || d > to)) return false;
+    return true;
+  });
+}
+
+// One block per supplier: name + email on the header line, its invoices
+// below, and the supplier's total to pay at the bottom.
+function groups(records) {
+  const map = new Map();
+  records.forEach(r => {
+    const key = r.supplier_domain || "";
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(r);
+  });
+  return [...map.entries()]
+    .map(([domain, rows]) => {
+      rows.sort((a, b) => dateStr(a).localeCompare(dateStr(b)));
+      // Most recent sender address for this supplier.
+      const email = [...rows].reverse().map(r => r.sender_email).find(Boolean) || "";
+      const total = rows.reduce((s, r) => s + amount(r), 0);
+      return { domain, name: supplierName(domain), email: cleanEmail(email), rows, total };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, "he"));
+}
+// "Name <addr@x>" -> "addr@x"
+function cleanEmail(s) {
+  const m = String(s).match(/<([^>]+)>/);
+  return (m ? m[1] : s).trim();
+}
+
+function companyCell(r) {
+  const opts = COMPANIES.map(c => `<option value="${escapeHtml(c)}" ${c === r.company ? "selected" : ""}>${escapeHtml(c)}</option>`).join("");
+  return `<select class="company-picker ${r.company ? "" : "unset"}" data-id="${r.id}" onchange="setCompany(this)">
+      <option value="">— לבחור —</option>${opts}
+    </select><span class="company-print">${escapeHtml(r.company || "")}</span>`;
+}
+
+function render() {
+  const records = filtered();
+  const gs = groups(records);
+  const grandExcl = gs.reduce((s, g) => s + g.total, 0);
+
+  const companyVal = document.getElementById("companyFilter").value;
+  const companyLabel = companyVal === NO_COMPANY ? "ללא חברה" : (companyVal || "כל החברות");
+  const from = document.getElementById("dateFrom").value, to = document.getElementById("dateTo").value;
+  const range = from || to ? ` · ${displayDate(from) || "…"} – ${displayDate(to) || "…"}` : "";
+  document.getElementById("printTitle").textContent = `חברה: ${companyLabel}${range}`;
+
+  document.getElementById("summary").innerHTML = records.length
+    ? `${gs.length} ספקים · ${records.length} חשבוניות · חברה: <strong>${escapeHtml(companyLabel)}</strong>${escapeHtml(range)}`
+    : "";
+
+  const el = document.getElementById("suppliers");
+  if (!records.length) {
+    el.innerHTML = '<div class="empty">אין חשבוניות בטווח ובסינון שנבחרו.</div>';
+    document.getElementById("grand").innerHTML = "";
+    return;
+  }
+  el.innerHTML = gs.map(g => `
+    <div class="supplier">
+      <div class="supplier-head">
+        <span class="supplier-name">${escapeHtml(g.name)}</span>
+        <span class="supplier-email">${escapeHtml(g.email)}</span>
+      </div>
+      <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>מס' חשבונית</th><th>תאריך</th><th>סניף</th><th>חברה</th>
+          <th class="num">ללא מע"מ</th><th class="num">כולל מע"מ</th>
+        </tr></thead>
+        <tbody>
+          ${g.rows.map(r => {
+            const a = amount(r);
+            return `<tr class="${r.is_credit ? "credit" : ""}">
+              <td>${escapeHtml(r.invoice_number || "—")} ${r.is_credit ? '<span class="tag">זיכוי</span>' : ""}</td>
+              <td>${escapeHtml(displayDate(dateStr(r)))}</td>
+              <td>${escapeHtml(r.branch || "")}</td>
+              <td>${companyCell(r)}</td>
+              <td class="num">${money(a)}</td>
+              <td class="num">${money(a * (1 + VAT_RATE))}</td>
+            </tr>`;
+          }).join("")}
+          <tr class="total">
+            <td colspan="4">סה"כ לתשלום — ${escapeHtml(g.name)}</td>
+            <td class="num">${money(g.total)}</td>
+            <td class="num">${money(g.total * (1 + VAT_RATE))}</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+    </div>`).join("");
+
+  document.getElementById("grand").innerHTML = `
+    <div class="grand">
+      <span>סה"כ לתשלום (כל הספקים)</span>
+      <span>${money(grandExcl * (1 + VAT_RATE))} <small style="font-weight:500;color:var(--muted);font-size:13px;">(ללא מע"מ ${money(grandExcl)})</small></span>
+    </div>`;
+}
+
+async function setCompany(sel) {
+  const id = Number(sel.dataset.id);
+  const company = sel.value;
+  const res = await fetch(`/api/inventory/set-company/${id}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ company }),
+  });
+  if (!res.ok) { alert("שגיאה בשמירת החברה: " + (await res.text())); return; }
+  const r = RECORDS.find(x => x.id === id);
+  if (r) r.company = company || null;
+  render();
+}
+
+function exportExcel() {
+  const gs = groups(filtered());
+  if (!gs.length) { alert("אין נתונים לייצוא"); return; }
+  const round2 = n => Math.round(n * 100) / 100;
+  const rows = [];
+  let grand = 0;
+  gs.forEach(g => {
+    rows.push([g.name, g.email]);
+    rows.push(["מס' חשבונית", "תאריך", "סוג", "סניף", "חברה", 'ללא מע"מ', 'כולל מע"מ']);
+    g.rows.forEach(r => {
+      const a = amount(r);
+      rows.push([r.invoice_number || "", displayDate(dateStr(r)), r.is_credit ? "זיכוי" : "חשבונית",
+                 r.branch || "", r.company || "", round2(a), round2(a * (1 + VAT_RATE))]);
+    });
+    rows.push(['סה"כ לתשלום', "", "", "", "", round2(g.total), round2(g.total * (1 + VAT_RATE))]);
+    rows.push([]);
+    grand += g.total;
+  });
+  rows.push(['סה"כ לתשלום (כל הספקים)', "", "", "", "", round2(grand), round2(grand * (1 + VAT_RATE))]);
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws["!cols"] = [{ wch: 26 }, { wch: 28 }, { wch: 9 }, { wch: 18 }, { wch: 28 }, { wch: 13 }, { wch: 13 }];
+  const wb = XLSX.utils.book_new();
+  wb.Workbook = { Views: [{ RTL: true }] };
+  XLSX.utils.book_append_sheet(wb, ws, "לתשלום");
+  XLSX.writeFile(wb, `מנהלת_חשבונות_${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
+
+function isoDate(d) {
+  const pad = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+function setThisMonth() {
+  const now = new Date();
+  document.getElementById("dateFrom").value = isoDate(new Date(now.getFullYear(), now.getMonth(), 1));
+  document.getElementById("dateTo").value = isoDate(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+  render();
+}
+function setLastMonth() {
+  const now = new Date();
+  document.getElementById("dateFrom").value = isoDate(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+  document.getElementById("dateTo").value = isoDate(new Date(now.getFullYear(), now.getMonth(), 0));
+  render();
+}
+function clearFilters() {
+  ["companyFilter", "supplierFilter", "dateFrom", "dateTo"].forEach(id => { document.getElementById(id).value = ""; });
+  render();
+}
+
+(async function init() {
+  const [names, companies, report] = await Promise.all([
+    fetch("/api/inventory/supplier-names"),
+    fetch("/api/inventory/companies"),
+    fetch("/api/inventory/report"),
+  ]);
+  if (names.ok) SUPPLIER_NAMES = await names.json();
+  if (companies.ok) COMPANIES = await companies.json();
+  if (!report.ok) {
+    document.getElementById("suppliers").innerHTML = '<div class="empty">שגיאה בטעינה: ' + escapeHtml(await report.text()) + "</div>";
+    return;
+  }
+  RECORDS = await report.json();
+  populateFilters();
+  setThisMonth();
+})();
+</script>
+</body>
+</html>
