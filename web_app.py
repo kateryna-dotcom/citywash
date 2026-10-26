@@ -1068,6 +1068,40 @@ async def inventory_resolve_item(record_id: int, item_index: int, request: Reque
     return {"status": "updated"}
 
 
+def _item_mapping_key(line_item: dict) -> str:
+    """The item_mappings key for a parsed line item: the supplier's own
+    sku/barcode, or the normalized description when the invoice prints no
+    מק"ט at all (item_matcher.description_key)."""
+    sku = item_matcher.clean_key(line_item.get("sku") or line_item.get("barcode") or "")
+    return sku or item_matcher.description_key(line_item.get("description") or "")
+
+
+def _apply_fix_to_other_open_invoices(supplier_domain: str, mapping_key: str,
+                                      updates: dict, record_id: int, item_index: int) -> int:
+    """A saved mapping used to only take effect on invoices ingested
+    *after* the fix -- the same product on another invoice already sitting
+    in the review list kept its old (wrong) match, so it looked like the
+    correction hadn't been remembered at all (Kateryna 2026-10-26). Applies
+    the same correction to every matching line on this supplier's other
+    open invoices right away. Returns how many lines were updated."""
+    if not mapping_key:
+        return 0
+    changed = 0
+    for rec in invoice_store.list_open_records_for_supplier(supplier_domain):
+        items = rec.get("line_items") or []
+        touched = False
+        for idx, it in enumerate(items):
+            if rec["id"] == record_id and idx == item_index:
+                continue
+            if _item_mapping_key(it) == mapping_key:
+                it.update(updates)
+                touched = True
+                changed += 1
+        if touched:
+            invoice_store.update_line_items(rec["id"], items)
+    return changed
+
+
 @app.post("/api/inventory/match-item/{record_id}/{item_index}")
 async def inventory_match_item(record_id: int, item_index: int, request: Request):
     """Resolves a line item the automatic matcher couldn't confidently
@@ -1107,18 +1141,20 @@ async def inventory_match_item(record_id: int, item_index: int, request: Request
     # the supplier's invoice has no מק"ט at all (see item_matcher.
     # description_key), so there's always something stable to save a
     # reusable mapping under.
-    sku = item_matcher.clean_key(line_item.get("sku") or line_item.get("barcode") or "")
-    mapping_key = sku or item_matcher.description_key(line_item.get("description") or "")
+    mapping_key = _item_mapping_key(line_item)
 
     try:
         if action == "skip":
             if mapping_key:
                 item_mapping_store.upsert_mapping(supplier_domain, mapping_key, "skip")
-            invoice_store.update_line_item(record_id, item_index, {
+            updates = {
                 "match_source": "skip", "needs_confirmation": False,
                 "matched_code": None, "matched_barcode": None, "matched_name": None,
-            })
-            return {"status": "updated", "match_source": "skip"}
+            }
+            invoice_store.update_line_item(record_id, item_index, updates)
+            also_updated = _apply_fix_to_other_open_invoices(
+                supplier_domain, mapping_key, updates, record_id, item_index)
+            return {"status": "updated", "match_source": "skip", "also_updated": also_updated}
 
         if action == "matched":
             if not barcode:
@@ -1141,12 +1177,16 @@ async def inventory_match_item(record_id: int, item_index: int, request: Request
                     catalog_code=catalog_code, catalog_name=catalog_name,
                     notes=None if item else "force-saved: not in the cashontab_catalog.json snapshot at save time",
                 )
-            invoice_store.update_line_item(record_id, item_index, {
+            updates = {
                 "match_source": "matched", "needs_confirmation": False,
                 "matched_code": catalog_code, "matched_barcode": item.get("barcode") if item else barcode,
                 "matched_name": catalog_name,
-            })
-            return {"status": "updated", "match_source": "matched", "matched_name": catalog_name}
+            }
+            invoice_store.update_line_item(record_id, item_index, updates)
+            also_updated = _apply_fix_to_other_open_invoices(
+                supplier_domain, mapping_key, updates, record_id, item_index)
+            return {"status": "updated", "match_source": "matched", "matched_name": catalog_name,
+                    "also_updated": also_updated}
 
         return Response('action must be "matched" or "skip"', status_code=400)
     except Exception as e:  # noqa: BLE001

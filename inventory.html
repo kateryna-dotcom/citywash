@@ -502,7 +502,13 @@ function matchCell(recordId, idx, it) {
     return `<span class="match-badge skip">לא נכנס למלАי</span> ${fixToggle(recordId, idx)}${matchResolveInput(recordId, idx, true)}`;
   }
   if (src === "matched" || src === "exact" || src === "learned" || (src === "fuzzy" && !it.needs_confirmation)) {
-    return `<span class="match-badge ok">✓ ${escapeHtml(it.matched_name || "")}</span> ${fixToggle(recordId, idx)}${matchResolveInput(recordId, idx, true)}`;
+    // Where the match came from, so it's clear what was remembered from a
+    // previous fix vs. guessed by the matcher (Kateryna 2026-10-26: "מה מתאים למה").
+    const how = src === "matched" || src === "learned" ? "זכור מתיקון שלך"
+      : src === "exact" ? "זוהה לפי ברקוד" : "ניחוש לפי שם — בדקי";
+    return `<span class="match-badge ok">✓ ${escapeHtml(it.matched_name || "")}</span>
+      <span style="font-size:11px;color:#5b7186;">(${how}${it.matched_code ? " · " + escapeHtml(it.matched_code) : ""})</span>
+      ${fixToggle(recordId, idx)}${matchResolveInput(recordId, idx, true)}`;
   }
   if (src === "new_pending") {
     return `

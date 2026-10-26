@@ -176,6 +176,20 @@ def list_records_for_report() -> list:
             return [dict(r) for r in cur.fetchall()]
 
 
+def list_open_records_for_supplier(supplier_domain: str) -> list:
+    """id + line_items of every not-yet-handled invoice from this supplier
+    -- used to apply an item correction Kateryna just made to the same
+    product on the other invoices still waiting in the review list."""
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, line_items FROM invoice_records
+                WHERE supplier_domain=%s AND status IN ('needs_review', 'no_pdf_found')
+                  AND line_items IS NOT NULL
+            """, (supplier_domain,))
+            return [dict(r) for r in cur.fetchall()]
+
+
 def count_by_supplier_and_status() -> list:
     """Temporary diagnostic (2026-09-28, see web_app._last_invoice_scan) --
     every (supplier_domain, status) pair with its row count, INCLUDING
