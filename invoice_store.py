@@ -168,7 +168,7 @@ def list_records_for_report() -> list:
     with _get_conn() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
-                SELECT id, branch, supplier_domain, company, received_at, line_items,
+                SELECT id, branch, supplier_domain, sender_email, company, received_at, line_items,
                        invoice_number, subject, raw_text, status
                 FROM invoice_records WHERE status <> 'irrelevant'
                 ORDER BY received_at
