@@ -343,25 +343,29 @@ def _resolve_item_picker(page, item, timeout=1500):
     (the same exact-code rule as _pick_unique_search_result -- never a
     guess); otherwise close the picker. A no-op when no picker shows."""
     code = str(item["code"])
+    picker_title = page.locator(':text-is("בחירת פריט")').first
+    # Rows of the picker's results table: any <tr> with its own בחר button.
+    # Deliberately not scoped to an ".ant-modal" ancestor -- live run
+    # 2026-10-26 showed the same failure again after scoping it that way,
+    # so this picker evidently isn't built as an ant-modal. The grid row
+    # behind it has no בחר button, so it can never be picked by mistake.
+    pick_rows = page.locator("tr").filter(has=page.get_by_role("button", name="בחר", exact=True))
     try:
-        picker_title = page.locator(':text-is("בחירת פריט")').first
         picker_title.wait_for(state="visible", timeout=timeout)
     except PlaywrightTimeoutError:
-        return
-    modal = picker_title.locator(
-        "xpath=ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' ant-modal ')][1]"
-    )
+        if pick_rows.count() == 0:
+            return
     # Results load asynchronously (a spinner shows first) -- poll briefly.
-    for _ in range(10):
-        rows = modal.locator("tr", has_text=code)
+    for _ in range(12):
+        rows = pick_rows.filter(has_text=code)
         for i in range(rows.count()):
             row = rows.nth(i)
             cells = row.locator("td")
             for j in range(cells.count()):
                 try:
                     if cells.nth(j).inner_text(timeout=1000).strip() == code:
-                        row.get_by_role("button", name="בחר").click(timeout=3000)
-                        page.wait_for_timeout(500)
+                        row.get_by_role("button", name="בחר", exact=True).click(timeout=3000)
+                        page.wait_for_timeout(700)
                         return
                 except PlaywrightTimeoutError:
                     continue
@@ -371,7 +375,7 @@ def _resolve_item_picker(page, item, timeout=1500):
     page.wait_for_timeout(300)
     try:
         if picker_title.is_visible():
-            modal.get_by_role("button", name="ביטול").click(timeout=2000)
+            page.get_by_role("button", name="ביטול", exact=True).last.click(timeout=2000)
             page.wait_for_timeout(300)
     except PlaywrightTimeoutError:
         pass
@@ -461,7 +465,9 @@ def _fill_line_item(page, item):
     try:
         row.get_by_role("button", name="שמור").click(timeout=_TIMEOUT_MS)
     except PlaywrightTimeoutError:
-        _fail(page, f'לא נמצא כפתור "שמור" לשורת הפריט {item.get("code")}')
+        picker_open = page.locator(':text-is("בחירת פריט")').first.is_visible()
+        _fail(page, f'לא נמצא כפתור "שמור" לשורת הפריט {item.get("code")}' +
+              (' (חלון "בחירת פריט" נשאר פתוח ולא נמצאה בו שורה עם הקוד הזה בדיוק)' if picker_open else ''))
     # The same "not this supplier's item" prompt can also pop only once
     # שמור is clicked -- live run 2026-09-29 (פטרוטק, 7290011785505): the
     # prompt appeared after the row's שמור, the row stayed unsaved behind
