@@ -8,7 +8,7 @@
   :root {
     --blue-dark: #0b4f8a; --blue: #1e6fb8; --blue-light: #eaf3fb;
     --border: #d9e6f0; --text: #1c2b39; --muted: #5b7186; --red: #d92b2b;
-    --amber: #a86a00;
+    --amber: #a86a00; --green: #1a8a4a;
   }
   * { box-sizing: border-box; }
   body {
@@ -52,6 +52,15 @@
   td.num, th.num { text-align: left; direction: ltr; font-variant-numeric: tabular-nums; white-space: nowrap; }
   tr.credit td { color: var(--amber); }
   tr.total td { font-weight: 700; background: #f8fafc; border-bottom: none; }
+  tr.paid-sum td { color: var(--green); font-weight: 600; background: #f8fafc; border-bottom: none; padding-top: 2px; }
+  tr.paid td { color: var(--muted); }
+  tr.paid td.num { text-decoration: line-through; }
+  .pay-btn {
+    border: 1px solid var(--blue); background: #fff; color: var(--blue); border-radius: 6px;
+    padding: 3px 10px; font-size: 12.5px; font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap;
+  }
+  .pay-btn.done { background: var(--green); border-color: var(--green); color: #fff; }
+  .pay-print { display: none; }
   .tag { font-size: 11.5px; padding: 1px 7px; border-radius: 10px; background: #fff4e0; color: var(--amber); font-weight: 600; }
   .company-picker {
     padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px;
@@ -78,6 +87,8 @@
     .print-title { display: block; font-size: 13px; color: var(--muted); margin-bottom: 10px; }
     .company-picker { display: none; }
     .company-print { display: inline; }
+    .pay-btn { display: none; }
+    .pay-print { display: inline; }
     .supplier { border-color: #999; }
   }
 </style>
@@ -97,6 +108,13 @@
     </label>
     <label class="f">ספק:
       <select id="supplierFilter" onchange="render()"><option value="">כל הספקים</option></select>
+    </label>
+    <label class="f">תשלום:
+      <select id="paidFilter" onchange="render()">
+        <option value="">הכל</option>
+        <option value="unpaid">לא שולם</option>
+        <option value="paid">שולם</option>
+      </select>
     </label>
     <label class="f">מתאריך: <input type="date" id="dateFrom" onchange="render()"></label>
     <label class="f">עד תאריך: <input type="date" id="dateTo" onchange="render()"></label>
@@ -164,7 +182,10 @@ function filtered() {
   const supplier = document.getElementById("supplierFilter").value;
   const from = document.getElementById("dateFrom").value;
   const to = document.getElementById("dateTo").value;
+  const paid = document.getElementById("paidFilter").value;
   return RECORDS.filter(r => {
+    if (paid === "paid" && !r.paid_at) return false;
+    if (paid === "unpaid" && r.paid_at) return false;
     if (company === NO_COMPANY ? r.company : (company && r.company !== company)) return false;
     if (supplier && r.supplier_domain !== supplier) return false;
     const d = dateStr(r);
@@ -188,8 +209,10 @@ function groups(records) {
       rows.sort((a, b) => dateStr(a).localeCompare(dateStr(b)));
       // Most recent sender address for this supplier.
       const email = [...rows].reverse().map(r => r.sender_email).find(Boolean) || "";
-      const total = rows.reduce((s, r) => s + amount(r), 0);
-      return { domain, name: supplierName(domain), email: cleanEmail(email), rows, total };
+      // total = still to pay; invoices marked שולם move to paidTotal.
+      const total = rows.filter(r => !r.paid_at).reduce((s, r) => s + amount(r), 0);
+      const paidTotal = rows.filter(r => r.paid_at).reduce((s, r) => s + amount(r), 0);
+      return { domain, name: supplierName(domain), email: cleanEmail(email), rows, total, paidTotal };
     })
     .sort((a, b) => a.name.localeCompare(b.name, "he"));
 }
@@ -210,6 +233,7 @@ function render() {
   const records = filtered();
   const gs = groups(records);
   const grandExcl = gs.reduce((s, g) => s + g.total, 0);
+  const grandPaid = gs.reduce((s, g) => s + g.paidTotal, 0);
 
   const companyVal = document.getElementById("companyFilter").value;
   const companyLabel = companyVal === NO_COMPANY ? "ללא חברה" : (companyVal || "כל החברות");
@@ -237,25 +261,33 @@ function render() {
       <table>
         <thead><tr>
           <th>מס' חשבונית</th><th>תאריך</th><th>סניף</th><th>חברה</th>
-          <th class="num">ללא מע"מ</th><th class="num">כולל מע"מ</th>
+          <th class="num">ללא מע"מ</th><th class="num">כולל מע"מ</th><th>שולם</th>
         </tr></thead>
         <tbody>
           ${g.rows.map(r => {
             const a = amount(r);
-            return `<tr class="${r.is_credit ? "credit" : ""}">
+            return `<tr class="${r.is_credit ? "credit" : ""} ${r.paid_at ? "paid" : ""}">
               <td>${escapeHtml(r.invoice_number || "—")} ${r.is_credit ? '<span class="tag">זיכוי</span>' : ""}</td>
               <td>${escapeHtml(displayDate(dateStr(r)))}</td>
               <td>${escapeHtml(r.branch || "")}</td>
               <td>${companyCell(r)}</td>
               <td class="num">${money(a)}</td>
               <td class="num">${money(a * (1 + VAT_RATE))}</td>
+              <td>${payCell(r)}</td>
             </tr>`;
           }).join("")}
           <tr class="total">
             <td colspan="4">סה"כ לתשלום — ${escapeHtml(g.name)}</td>
             <td class="num">${money(g.total)}</td>
             <td class="num">${money(g.total * (1 + VAT_RATE))}</td>
+            <td></td>
           </tr>
+          ${g.paidTotal ? `<tr class="paid-sum">
+            <td colspan="4">✓ כבר שולם</td>
+            <td class="num">${money(g.paidTotal)}</td>
+            <td class="num">${money(g.paidTotal * (1 + VAT_RATE))}</td>
+            <td></td>
+          </tr>` : ""}
         </tbody>
       </table>
       </div>
@@ -265,7 +297,25 @@ function render() {
     <div class="grand">
       <span>סה"כ לתשלום (כל הספקים)</span>
       <span>${money(grandExcl * (1 + VAT_RATE))} <small style="font-weight:500;color:var(--muted);font-size:13px;">(ללא מע"מ ${money(grandExcl)})</small></span>
-    </div>`;
+    </div>
+    ${grandPaid ? `<div class="summary" style="margin-top:8px;color:var(--green);">✓ כבר שולם בסינון הנוכחי: <strong style="color:var(--green)">${money(grandPaid * (1 + VAT_RATE))}</strong> (ללא מע"מ ${money(grandPaid)}) — לא נכלל בסה"כ לתשלום</div>` : ""}`;
+}
+
+function payCell(r) {
+  const when = r.paid_at ? displayDate(String(r.paid_at).slice(0, 10)) : "";
+  return r.paid_at
+    ? `<button class="pay-btn done" title="שולם ב-${escapeHtml(when)} — לחיצה מבטלת" onclick="setPaid(${r.id}, false)">✓ שולם</button><span class="pay-print">✓ ${escapeHtml(when)}</span>`
+    : `<button class="pay-btn" onclick="setPaid(${r.id}, true)">שולם</button><span class="pay-print">—</span>`;
+}
+
+async function setPaid(id, paid) {
+  const res = await fetch(`/api/inventory/set-paid/${id}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paid }),
+  });
+  if (!res.ok) { alert("שגיאה בשמירה: " + (await res.text())); return; }
+  const r = RECORDS.find(x => x.id === id);
+  if (r) r.paid_at = paid ? new Date().toISOString() : null;
+  render();
 }
 
 async function setCompany(sel) {
@@ -288,19 +338,21 @@ function exportExcel() {
   let grand = 0;
   gs.forEach(g => {
     rows.push([g.name, g.email]);
-    rows.push(["מס' חשבונית", "תאריך", "סוג", "סניף", "חברה", 'ללא מע"מ', 'כולל מע"מ']);
+    rows.push(["מס' חשבונית", "תאריך", "סוג", "סניף", "חברה", 'ללא מע"מ', 'כולל מע"מ', "שולם"]);
     g.rows.forEach(r => {
       const a = amount(r);
       rows.push([r.invoice_number || "", displayDate(dateStr(r)), r.is_credit ? "זיכוי" : "חשבונית",
-                 r.branch || "", r.company || "", round2(a), round2(a * (1 + VAT_RATE))]);
+                 r.branch || "", r.company || "", round2(a), round2(a * (1 + VAT_RATE)),
+                 r.paid_at ? displayDate(String(r.paid_at).slice(0, 10)) : ""]);
     });
     rows.push(['סה"כ לתשלום', "", "", "", "", round2(g.total), round2(g.total * (1 + VAT_RATE))]);
+    if (g.paidTotal) rows.push(["כבר שולם", "", "", "", "", round2(g.paidTotal), round2(g.paidTotal * (1 + VAT_RATE))]);
     rows.push([]);
     grand += g.total;
   });
   rows.push(['סה"כ לתשלום (כל הספקים)', "", "", "", "", round2(grand), round2(grand * (1 + VAT_RATE))]);
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws["!cols"] = [{ wch: 26 }, { wch: 28 }, { wch: 9 }, { wch: 18 }, { wch: 28 }, { wch: 13 }, { wch: 13 }];
+  ws["!cols"] = [{ wch: 26 }, { wch: 28 }, { wch: 9 }, { wch: 18 }, { wch: 28 }, { wch: 13 }, { wch: 13 }, { wch: 11 }];
   const wb = XLSX.utils.book_new();
   wb.Workbook = { Views: [{ RTL: true }] };
   XLSX.utils.book_append_sheet(wb, ws, "לתשלום");
@@ -324,7 +376,7 @@ function setLastMonth() {
   render();
 }
 function clearFilters() {
-  ["companyFilter", "supplierFilter", "dateFrom", "dateTo"].forEach(id => { document.getElementById(id).value = ""; });
+  ["companyFilter", "supplierFilter", "paidFilter", "dateFrom", "dateTo"].forEach(id => { document.getElementById(id).value = ""; });
   render();
 }
 
