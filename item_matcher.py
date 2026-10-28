@@ -236,15 +236,42 @@ def match_item(line_item: dict, learned_mapping: dict = None) -> dict:
     return result
 
 
+def invoice_line_keys(line_items: list) -> list:
+    """For each line of one invoice, the item_mappings keys it may be
+    stored/looked up under, most specific first.
+
+    Normally a line's key is the supplier's sku (or its description when
+    the invoice has no sku). But live 2026-10-26, a whole invoice's lines
+    all came in with the SAME sku while being different products -- one
+    fix then "matched" every line, and that one mapping would have been
+    applied to all of them on every future invoice. So when a sku repeats
+    within an invoice with different descriptions, that sku is ambiguous
+    there and the line is only ever keyed by "sku|description"."""
+    items = line_items or []
+    skus = [_clean_key(it.get("sku") or it.get("barcode") or "") for it in items]
+    descs = [description_key(it.get("description") or "") for it in items]
+    descs_by_sku = {}
+    for sku, desc in zip(skus, descs):
+        if sku:
+            descs_by_sku.setdefault(sku, set()).add(desc)
+    out = []
+    for sku, desc in zip(skus, descs):
+        if not sku:
+            out.append([desc] if desc else [])
+        elif len(descs_by_sku[sku]) > 1:
+            out.append([f"{sku}|{desc}"])
+        else:
+            out.append([f"{sku}|{desc}", sku])
+    return out
+
+
 def match_invoice_items(line_items: list, learned_mappings: dict = None) -> list:
-    """Same as match_item over a whole invoice. `learned_mappings` maps
-    supplier_sku (or, for a skuless supplier, description_key(description))
-    -> mapping row for the invoice's supplier."""
+    """Same as match_item over a whole invoice. `learned_mappings` maps an
+    item_mappings key (see invoice_line_keys) -> mapping row for the
+    invoice's supplier."""
     learned_mappings = learned_mappings or {}
     out = []
-    for line_item in line_items or []:
-        key = _clean_key(line_item.get("sku") or line_item.get("barcode") or "")
-        if not key:
-            key = description_key(line_item.get("description", ""))
-        out.append(match_item(line_item, learned_mappings.get(key)))
+    for line_item, keys in zip(line_items or [], invoice_line_keys(line_items)):
+        learned = next((learned_mappings[k] for k in keys if k in learned_mappings), None)
+        out.append(match_item(line_item, learned))
     return out
