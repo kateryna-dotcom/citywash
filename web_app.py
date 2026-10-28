@@ -997,6 +997,20 @@ async def inventory_set_company(record_id: int, request: Request):
     return {"status": "updated"}
 
 
+@app.post("/api/inventory/set-paid/{record_id}")
+async def inventory_set_paid(record_id: int, request: Request):
+    """The מנהלת חשבונות tab's שולם toggle -- {"paid": true|false}."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    payload = await request.json()
+    try:
+        invoice_store.update_paid(record_id, bool(payload.get("paid")))
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error updating paid status: {e}", status_code=500)
+    return {"status": "updated"}
+
+
 @app.post("/api/inventory/check-now")
 def inventory_check_now(request: Request):
     unauthorized = _require_api_auth(request)

@@ -54,6 +54,9 @@ def init_db():
             # Which City Wash legal entity (companies.py) the invoice was
             # billed to -- same auto-detect-then-editable pattern as branch.
             cur.execute("ALTER TABLE invoice_records ADD COLUMN IF NOT EXISTS company TEXT;")
+            # When the bookkeeper marked the invoice שולם on the מנהלת
+            # חשבונות tab (NULL = still to pay).
+            cur.execute("ALTER TABLE invoice_records ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;")
             # One-time backfill (idempotent -- the WHERE clause matches
             # nothing on later startups) for records ingested before
             # invoice_ingest._is_non_invoice_subject existed: bank-transfer
@@ -170,7 +173,7 @@ def list_records_for_report() -> list:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("""
                 SELECT id, branch, supplier_domain, sender_email, company, received_at, line_items,
-                       invoice_number, subject, raw_text, status
+                       invoice_number, subject, raw_text, status, paid_at
                 FROM invoice_records WHERE status <> 'irrelevant'
                 ORDER BY received_at
             """)
@@ -269,6 +272,17 @@ def update_branch(record_id: int, branch: str):
             cur.execute(
                 "UPDATE invoice_records SET branch=%s, updated_at=now() WHERE id=%s",
                 (branch, record_id),
+            )
+        conn.commit()
+
+
+def update_paid(record_id: int, paid: bool):
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE invoice_records SET paid_at = CASE WHEN %s THEN now() ELSE NULL END, "
+                "updated_at=now() WHERE id=%s",
+                (paid, record_id),
             )
         conn.commit()
 
