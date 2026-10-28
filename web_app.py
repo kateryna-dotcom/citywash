@@ -1192,7 +1192,9 @@ def _apply_fix_to_other_open_invoices(supplier_domain: str, mapping_key: str,
         items = rec.get("line_items") or []
         touched = False
         for idx, (it, keys) in enumerate(zip(items, item_matcher.invoice_line_keys(items))):
-            if rec["id"] == record_id and idx == item_index:
+            # Never onto other lines of the same invoice -- those are
+            # separate lines by definition, even when they look alike.
+            if rec["id"] == record_id:
                 continue
             if mapping_key in keys:
                 it.update(updates)

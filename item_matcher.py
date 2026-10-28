@@ -250,18 +250,28 @@ def invoice_line_keys(line_items: list) -> list:
     items = line_items or []
     skus = [_clean_key(it.get("sku") or it.get("barcode") or "") for it in items]
     descs = [description_key(it.get("description") or "") for it in items]
-    descs_by_sku = {}
-    for sku, desc in zip(skus, descs):
-        if sku:
-            descs_by_sku.setdefault(sku, set()).add(desc)
+    full = [f"{s}|{d}" if s else d for s, d in zip(skus, descs)]
+    full_count = {}
+    sku_count = {}
+    for s, f in zip(skus, full):
+        full_count[f] = full_count.get(f, 0) + 1
+        if s:
+            sku_count[s] = sku_count.get(s, 0) + 1
     out = []
-    for sku, desc in zip(skus, descs):
-        if not sku:
-            out.append([desc] if desc else [])
-        elif len(descs_by_sku[sku]) > 1:
-            out.append([f"{sku}|{desc}"])
+    for sku, f in zip(skus, full):
+        if not f or full_count[f] > 1:
+            # Several lines here look identical to us (same sku AND same --
+            # often empty -- description) yet are separate lines, e.g. the
+            # live 2026-10-28 invoice whose 6 different products all came
+            # in like this. Nothing here tells them apart, so a fix to one
+            # must never be remembered for or copied onto the others.
+            out.append([])
+        elif sku and sku_count[sku] > 1:
+            out.append([f])
+        elif sku:
+            out.append([f, sku])
         else:
-            out.append([f"{sku}|{desc}", sku])
+            out.append([f])
     return out
 
 
