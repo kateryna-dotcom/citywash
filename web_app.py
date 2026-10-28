@@ -1166,12 +1166,15 @@ async def inventory_resolve_item(record_id: int, item_index: int, request: Reque
     return {"status": "updated"}
 
 
-def _item_mapping_key(line_item: dict) -> str:
-    """The item_mappings key for a parsed line item: the supplier's own
-    sku/barcode, or the normalized description when the invoice prints no
-    מק"ט at all (item_matcher.description_key)."""
-    sku = item_matcher.clean_key(line_item.get("sku") or line_item.get("barcode") or "")
-    return sku or item_matcher.description_key(line_item.get("description") or "")
+def _item_mapping_key(line_items: list, index: int) -> str:
+    """The item_mappings key to save a fix of line `index` under: the
+    supplier's sku, the normalized description when the invoice prints no
+    מק"ט, or "sku|description" when that sku repeats on this invoice for
+    different products (see item_matcher.invoice_line_keys)."""
+    keys = item_matcher.invoice_line_keys(line_items)[index]
+    # Plain sku when it's unambiguous here, so the fix still applies to the
+    # same product on invoices where its description is worded differently.
+    return keys[-1] if keys else ""
 
 
 def _apply_fix_to_other_open_invoices(supplier_domain: str, mapping_key: str,
@@ -1188,10 +1191,10 @@ def _apply_fix_to_other_open_invoices(supplier_domain: str, mapping_key: str,
     for rec in invoice_store.list_open_records_for_supplier(supplier_domain):
         items = rec.get("line_items") or []
         touched = False
-        for idx, it in enumerate(items):
+        for idx, (it, keys) in enumerate(zip(items, item_matcher.invoice_line_keys(items))):
             if rec["id"] == record_id and idx == item_index:
                 continue
-            if _item_mapping_key(it) == mapping_key:
+            if mapping_key in keys:
                 it.update(updates)
                 touched = True
                 changed += 1
@@ -1239,7 +1242,7 @@ async def inventory_match_item(record_id: int, item_index: int, request: Request
     # the supplier's invoice has no מק"ט at all (see item_matcher.
     # description_key), so there's always something stable to save a
     # reusable mapping under.
-    mapping_key = _item_mapping_key(line_item)
+    mapping_key = _item_mapping_key(items, item_index)
 
     try:
         if action == "skip":
