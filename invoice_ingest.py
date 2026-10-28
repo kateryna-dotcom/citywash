@@ -1065,6 +1065,85 @@ def guess_invoice_number(subject: str, text: str, pdf_bytes: bytes = None) -> st
     return ""
 
 
+def _create_pdf_record(record_key, supplier_domain, sender, subject, received_at,
+                       pdf_filename, pdf_bytes, html_body, multi=False):
+    """Extracts and stores one invoice PDF as a needs_review record."""
+    text = _extract_pdf_text(pdf_bytes)
+    line_items = parse_line_items(supplier_domain, text, pdf_bytes=pdf_bytes)
+    # The branch is sometimes only named in the email body rather
+    # than the PDF itself (e.g. ברקו סנטס's "...סניף רעננה" intro
+    # line, with no branch on the PDF's own bill-to line) -- feed
+    # both into detection. branches.detect_branch just checks
+    # substring presence, so appending the (HTML, tags and all)
+    # body text never hurts the PDF-only suppliers either. With several
+    # PDFs in one email the file name often carries the branch
+    # ("... ב.דגן 14.10.pdf"), so it goes in too.
+    branch_text = text + "\n" + html_body if html_body else text
+    if multi and pdf_filename:
+        branch_text = pdf_filename + "\n" + branch_text
+    if multi:
+        # One subject for several invoices -- a number in it can only be
+        # right for one of them, so read each PDF's own number first.
+        invoice_number = (guess_invoice_number("", text, pdf_bytes=pdf_bytes)
+                          or guess_invoice_number(subject, ""))
+        branch = branches.detect_branch(branch_text) or _guess_branch(subject, "")
+    else:
+        invoice_number = guess_invoice_number(subject, text, pdf_bytes=pdf_bytes)
+        branch = _guess_branch(subject, branch_text)
+    invoice_store.create_record({
+        "gmail_message_id": record_key,
+        "supplier_domain": supplier_domain,
+        "sender_email": sender,
+        "subject": subject,
+        "received_at": received_at,
+        "pdf_filename": pdf_filename,
+        "raw_text": text,
+        "pdf_data": pdf_bytes,
+        "branch": branch,
+        "invoice_number": invoice_number,
+        "company": companies.detect_company(_company_detection_text(pdf_bytes, text)),
+        "line_items": line_items or None,
+        "status": "needs_review",
+    })
+
+
+# Message ids already checked for extra PDFs in this process -- so the
+# backfill below costs one Gmail fetch per message per restart, not per scan.
+_extra_pdfs_checked = set()
+
+
+def _backfill_extra_pdfs(message_id: str) -> int:
+    """For a message ingested before every attached PDF was processed: adds
+    a record for each PDF beyond the first that doesn't have one yet.
+    Returns how many were added."""
+    if message_id in _extra_pdfs_checked:
+        return 0
+    _extra_pdfs_checked.add(message_id)
+    message = gmail_client.get_message(message_id)
+    pdfs = gmail_client.find_pdf_attachments(message)
+    if len(pdfs) < 2:
+        return 0
+    subject = gmail_client.extract_header(message, "Subject")
+    if _is_non_invoice_subject(subject):
+        return 0
+    sender = gmail_client.extract_header(message, "From")
+    try:
+        received_at = parsedate_to_datetime(gmail_client.extract_header(message, "Date"))
+    except Exception:  # noqa: BLE001
+        received_at = None
+    supplier_domain = gmail_client.supplier_domain_for(sender)
+    added = 0
+    for n, att in enumerate(pdfs[1:], start=1):
+        record_key = f"{message_id}:{n}"
+        if invoice_store.message_already_processed(record_key):
+            continue
+        pdf_bytes = gmail_client.get_attachment_bytes(message_id, att["attachmentId"])
+        _create_pdf_record(record_key, supplier_domain, sender, subject, received_at,
+                           att["filename"], pdf_bytes, "", multi=True)
+        added += 1
+    return added
+
+
 def process_new_invoices(lookback_days: int = 30) -> dict:
     """Finds supplier invoice emails, downloads + extracts each new PDF, and
     stores a review-ready record. Returns a small summary dict."""
@@ -1078,6 +1157,10 @@ def process_new_invoices(lookback_days: int = 30) -> dict:
     for stub in candidates:
         message_id = stub["id"]
         if invoice_store.message_already_processed(message_id):
+            try:
+                created += _backfill_extra_pdfs(message_id)
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{message_id} (extra PDFs): {e}")
             skipped += 1
             continue
         try:
@@ -1115,12 +1198,20 @@ def process_new_invoices(lookback_days: int = 30) -> dict:
             html_body = ""
 
             if pdf_attachments:
-                # Most of these emails have exactly one invoice PDF; if
-                # there's more than one, process the first and note the
-                # rest in the text.
-                first = pdf_attachments[0]
-                pdf_filename = first["filename"]
-                pdf_bytes = gmail_client.get_attachment_bytes(message_id, first["attachmentId"])
+                # Every attached PDF is its own invoice -- live 2026-10-28,
+                # victoriascent sent one email with 3 invoices and only the
+                # first one ever showed up. The first keeps the plain message
+                # id as its record key (so existing records stay valid);
+                # the rest get "<message id>:<n>".
+                for n, att in enumerate(pdf_attachments):
+                    record_key = message_id if n == 0 else f"{message_id}:{n}"
+                    pdf_bytes = gmail_client.get_attachment_bytes(message_id, att["attachmentId"])
+                    _create_pdf_record(
+                        record_key, supplier_domain, sender, subject, received_at,
+                        att["filename"], pdf_bytes, "", multi=len(pdf_attachments) > 1,
+                    )
+                    created += 1
+                continue
             elif supplier_domain in gmail_client.LINK_INVOICE_DOMAINS:
                 # No attachment at all -- this supplier delivers the PDF via
                 # a download link in the body instead (see
@@ -1152,31 +1243,10 @@ def process_new_invoices(lookback_days: int = 30) -> dict:
                 created += 1
                 continue
 
-            text = _extract_pdf_text(pdf_bytes)
-            line_items = parse_line_items(supplier_domain, text, pdf_bytes=pdf_bytes)
-            # The branch is sometimes only named in the email body rather
-            # than the PDF itself (e.g. ברקו סנטס's "...סניף רעננה" intro
-            # line, with no branch on the PDF's own bill-to line) -- feed
-            # both into detection. branches.detect_branch just checks
-            # substring presence, so appending the (HTML, tags and all)
-            # body text never hurts the PDF-only suppliers either.
-            branch_text = text + "\n" + html_body if html_body else text
-
-            invoice_store.create_record({
-                "gmail_message_id": message_id,
-                "supplier_domain": supplier_domain,
-                "sender_email": sender,
-                "subject": subject,
-                "received_at": received_at,
-                "pdf_filename": pdf_filename,
-                "raw_text": text,
-                "pdf_data": pdf_bytes,
-                "branch": _guess_branch(subject, branch_text),
-                "invoice_number": guess_invoice_number(subject, text, pdf_bytes=pdf_bytes),
-                "company": companies.detect_company(_company_detection_text(pdf_bytes, text)),
-                "line_items": line_items or None,
-                "status": "needs_review",
-            })
+            _create_pdf_record(
+                message_id, supplier_domain, sender, subject, received_at,
+                pdf_filename, pdf_bytes, html_body,
+            )
             created += 1
         except Exception as e:  # noqa: BLE001
             errors.append(f"{message_id}: {e}")
