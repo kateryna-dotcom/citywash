@@ -46,6 +46,34 @@
   }
   .supplier-name { font-weight: 700; font-size: 15.5px; color: var(--blue-dark); }
   .supplier-email { font-size: 13px; color: var(--muted); direction: ltr; }
+  .supplier-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .credit-btn {
+    display: inline-flex; align-items: center; gap: 6px; border: 1px dashed var(--muted); background: #fff;
+    color: var(--muted); border-radius: 14px; padding: 2px 10px; font-size: 12.5px; cursor: pointer; font-family: inherit;
+  }
+  .credit-btn.waiting { border: 1px solid var(--red); color: var(--red); font-weight: 700; }
+  .red-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--red); display: inline-block; flex-shrink: 0; }
+  .credit-panel { background: #fff7f7; border-bottom: 1px solid var(--border); padding: 10px 16px; }
+  .credit-panel table { font-size: 13px; }
+  .credit-panel th, .credit-panel td { padding: 5px 8px; }
+  .credit-form { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .credit-form select, .credit-form input {
+    padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; font-family: inherit; background: #fff;
+  }
+  .credit-form input.amount { width: 110px; }
+  .credit-form input.note { flex: 1; min-width: 140px; }
+  .mini-btn {
+    border: 1px solid var(--blue); background: #fff; color: var(--blue); border-radius: 6px;
+    padding: 3px 9px; font-size: 12.5px; font-weight: 600; cursor: pointer; font-family: inherit; white-space: nowrap;
+  }
+  .mini-btn.go { background: var(--blue); color: #fff; }
+  .mini-btn.ok { border-color: var(--green); color: var(--green); }
+  .mini-btn.del { border-color: transparent; color: var(--muted); }
+  .credits-banner {
+    background: #fff; border: 1px solid var(--red); border-radius: 10px; padding: 10px 14px;
+    margin-bottom: 14px; font-size: 13.5px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  }
+  .credits-banner a { color: var(--red); font-weight: 600; cursor: pointer; text-decoration: underline; }
   table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
   th { text-align: right; color: var(--muted); font-weight: 600; padding: 7px 12px; border-bottom: 1px solid var(--border); }
   td { padding: 7px 12px; border-bottom: 1px solid var(--border); }
@@ -88,6 +116,7 @@
     .company-picker { display: none; }
     .company-print { display: inline; }
     .pay-btn { display: none; }
+    .credit-form, .mini-btn, .credits-banner { display: none; }
     .pay-print { display: inline; }
     .supplier { border-color: #999; }
   }
@@ -123,6 +152,7 @@
     <button class="btn secondary" onclick="clearFilters()">נקה</button>
   </div>
 
+  <div id="creditsBanner"></div>
   <div class="print-title" id="printTitle"></div>
   <div class="summary" id="summary"></div>
   <div id="suppliers"></div>
@@ -135,6 +165,10 @@ const VAT_RATE = 0.18;
 const NO_COMPANY = "__none__";
 
 let RECORDS = [];
+// Open "מחכה לזיכוי" entries (pending_credits rows not yet received).
+let CREDITS = [];
+const openCreditPanels = new Set();
+let CURRENT_GROUPS = [];
 let SUPPLIER_NAMES = {};
 let COMPANIES = [];
 
@@ -245,18 +279,24 @@ function render() {
     ? `${gs.length} ספקים · ${records.length} חשבוניות · חברה: <strong>${escapeHtml(companyLabel)}</strong>${escapeHtml(range)}`
     : "";
 
+  renderCreditsBanner();
+  CURRENT_GROUPS = gs;
   const el = document.getElementById("suppliers");
   if (!records.length) {
     el.innerHTML = '<div class="empty">אין חשבוניות שטופלו בטווח ובסינון שנבחרו.</div>';
     document.getElementById("grand").innerHTML = "";
     return;
   }
-  el.innerHTML = gs.map(g => `
+  el.innerHTML = gs.map((g, gi) => `
     <div class="supplier">
       <div class="supplier-head">
-        <span class="supplier-name">${escapeHtml(g.name)}</span>
+        <span class="supplier-title">
+          <span class="supplier-name">${escapeHtml(g.name)}</span>
+          ${creditButton(g.domain, gi)}
+        </span>
         <span class="supplier-email">${escapeHtml(g.email)}</span>
       </div>
+      ${openCreditPanels.has(g.domain) ? creditPanel(g.domain, gi) : ""}
       <div class="table-wrap">
       <table>
         <thead><tr>
@@ -267,7 +307,9 @@ function render() {
           ${g.rows.map(r => {
             const a = amount(r);
             return `<tr class="${r.is_credit ? "credit" : ""} ${r.paid_at ? "paid" : ""}">
-              <td>${escapeHtml(r.invoice_number || "—")} ${r.is_credit ? '<span class="tag">זיכוי</span>' : ""}</td>
+              <td>${escapeHtml(r.invoice_number || "—")} ${r.is_credit ? '<span class="tag">זיכוי</span>' : ""}${
+                CREDITS.some(c => c.supplier_domain === r.supplier_domain && c.invoice_number && c.invoice_number === r.invoice_number)
+                  ? ' <span class="red-dot" title="מחכה לזיכוי עבור חשבונית זו"></span>' : ""}</td>
               <td>${escapeHtml(displayDate(dateStr(r)))}</td>
               <td>${escapeHtml(r.branch || "")}</td>
               <td>${companyCell(r)}</td>
@@ -299,6 +341,119 @@ function render() {
       <span>${money(grandExcl * (1 + VAT_RATE))} <small style="font-weight:500;color:var(--muted);font-size:13px;">(ללא מע"מ ${money(grandExcl)})</small></span>
     </div>
     ${grandPaid ? `<div class="summary" style="margin-top:8px;color:var(--green);">✓ כבר שולם בסינון הנוכחי: <strong style="color:var(--green)">${money(grandPaid * (1 + VAT_RATE))}</strong> (ללא מע"מ ${money(grandPaid)}) — לא נכלל בסה"כ לתשלום</div>` : ""}`;
+}
+
+// ---- מחכה לזיכוי -------------------------------------------------------
+function creditsFor(domain) {
+  return CREDITS.filter(c => c.supplier_domain === domain);
+}
+
+function creditButton(domain, gi) {
+  const n = creditsFor(domain).length;
+  return n
+    ? `<button class="credit-btn waiting" onclick="toggleCredits(${gi})"><span class="red-dot"></span>מחכה לזיכוי${n > 1 ? ` (${n})` : ""}</button>`
+    : `<button class="credit-btn" onclick="toggleCredits(${gi})">+ מחכה לזיכוי</button>`;
+}
+
+function creditPanel(domain, gi) {
+  const list = creditsFor(domain);
+  // Every handled invoice of this supplier, whatever the date filter, so a
+  // credit can be tied to an older invoice too.
+  const invoices = RECORDS.filter(r => r.supplier_domain === domain && r.invoice_number)
+    .sort((a, b) => dateStr(b).localeCompare(dateStr(a)));
+  const rows = list.map(c => `
+    <tr>
+      <td>${escapeHtml(c.invoice_number || "—")}</td>
+      <td class="num">${c.amount != null ? money(c.amount) : "—"}</td>
+      <td>${escapeHtml(c.note || "")}</td>
+      <td>${escapeHtml(displayDate(String(c.created_at).slice(0, 10)))}</td>
+      <td style="white-space:nowrap">
+        <button class="mini-btn ok" onclick="creditReceived(${c.id})">✓ קיבלתי את הזיכוי</button>
+        <button class="mini-btn del" title="מחיקה" onclick="creditDelete(${c.id})">✕</button>
+      </td>
+    </tr>`).join("");
+  return `<div class="credit-panel">
+    ${list.length ? `<table>
+      <thead><tr><th>זיכוי עבור חשבונית</th><th class="num">סכום</th><th>הערה</th><th>נרשם</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>` : '<div class="summary" style="margin:0">אין זיכויים ממתינים לספק הזה.</div>'}
+    <div class="credit-form">
+      <select id="creditInvoice-${gi}">
+        <option value="">— חשבונית —</option>
+        ${invoices.map(r => `<option value="${escapeHtml(r.invoice_number)}">${escapeHtml(r.invoice_number)} · ${escapeHtml(displayDate(dateStr(r)))}</option>`).join("")}
+      </select>
+      <input class="amount" id="creditAmount-${gi}" type="number" step="0.01" placeholder="סכום (לא חובה)">
+      <input class="note" id="creditNote-${gi}" type="text" placeholder="הערה — למשל: מוצר פגום, חוסר במשלוח">
+      <button class="mini-btn go" onclick="creditAdd(${gi})">+ הוסף זיכוי ממתין</button>
+    </div>
+  </div>`;
+}
+
+function toggleCredits(gi) {
+  const domain = CURRENT_GROUPS[gi].domain;
+  if (openCreditPanels.has(domain)) openCreditPanels.delete(domain); else openCreditPanels.add(domain);
+  render();
+}
+
+function renderCreditsBanner() {
+  const byDomain = new Map();
+  CREDITS.forEach(c => byDomain.set(c.supplier_domain, (byDomain.get(c.supplier_domain) || 0) + 1));
+  const el = document.getElementById("creditsBanner");
+  if (!byDomain.size) { el.innerHTML = ""; return; }
+  const links = [...byDomain.entries()].map(([d, n]) =>
+    `<a data-domain="${escapeHtml(d)}">${escapeHtml(supplierName(d))}${n > 1 ? ` (${n})` : ""}</a>`).join(" · ");
+  el.innerHTML = `<div class="credits-banner"><span class="red-dot"></span><strong>ממתינים לזיכוי:</strong> ${links}</div>`;
+  el.querySelectorAll("a[data-domain]").forEach(a => a.addEventListener("click", () => showSupplierCredits(a.dataset.domain)));
+}
+
+// From the banner: show that supplier (any date) with its credit table open.
+function showSupplierCredits(domain) {
+  const sel = document.getElementById("supplierFilter");
+  if (![...sel.options].some(o => o.value === domain)) {
+    sel.insertAdjacentHTML("beforeend", `<option value="${escapeHtml(domain)}">${escapeHtml(supplierName(domain))}</option>`);
+  }
+  sel.value = domain;
+  document.getElementById("dateFrom").value = "";
+  document.getElementById("dateTo").value = "";
+  openCreditPanels.add(domain);
+  render();
+}
+
+async function loadCredits() {
+  const res = await fetch("/api/credits/list");
+  if (res.ok) CREDITS = await res.json();
+}
+
+async function creditAdd(gi) {
+  const domain = CURRENT_GROUPS[gi].domain;
+  const body = {
+    supplier_domain: domain,
+    invoice_number: document.getElementById(`creditInvoice-${gi}`).value,
+    amount: document.getElementById(`creditAmount-${gi}`).value,
+    note: document.getElementById(`creditNote-${gi}`).value,
+  };
+  if (!body.invoice_number && !body.note) { alert("בחרי חשבונית או כתבי הערה"); return; }
+  const res = await fetch("/api/credits/create", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  if (!res.ok) { alert("שגיאה בשמירה: " + (await res.text())); return; }
+  await loadCredits();
+  render();
+}
+
+async function creditReceived(id) {
+  const res = await fetch(`/api/credits/received/${id}`, { method: "POST" });
+  if (!res.ok) { alert("שגיאה: " + (await res.text())); return; }
+  await loadCredits();
+  render();
+}
+
+async function creditDelete(id) {
+  if (!confirm("למחוק את הרישום הזה?")) return;
+  const res = await fetch(`/api/credits/delete/${id}`, { method: "POST" });
+  if (!res.ok) { alert("שגיאה: " + (await res.text())); return; }
+  await loadCredits();
+  render();
 }
 
 function payCell(r) {
@@ -395,6 +550,7 @@ function clearFilters() {
   // Only invoices already handled (טופל, status "ok") go to the bookkeeper
   // -- anything still under review isn't confirmed yet (Kateryna 2026-10-26).
   RECORDS = (await report.json()).filter(r => r.status === "ok");
+  await loadCredits();
   populateFilters();
   setThisMonth();
 })();

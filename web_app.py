@@ -997,6 +997,66 @@ async def inventory_set_company(record_id: int, request: Request):
     return {"status": "updated"}
 
 
+@app.get("/api/credits/list")
+def credits_list(request: Request):
+    """Open "מחכה לזיכוי" entries for the מנהלת חשבונות tab."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        return invoice_store.list_open_credits()
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error loading credits: {e}", status_code=500)
+
+
+@app.post("/api/credits/create")
+async def credits_create(request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    payload = await request.json()
+    supplier_domain = (payload.get("supplier_domain") or "").strip()
+    if not supplier_domain:
+        return Response("supplier_domain is required", status_code=400)
+    amount = payload.get("amount")
+    try:
+        amount = float(amount) if amount not in (None, "") else None
+    except (TypeError, ValueError):
+        return Response("amount must be a number", status_code=400)
+    try:
+        new_id = invoice_store.create_credit(
+            supplier_domain, (payload.get("invoice_number") or "").strip(),
+            amount, (payload.get("note") or "").strip(),
+        )
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error saving credit: {e}", status_code=500)
+    return {"status": "created", "id": new_id}
+
+
+@app.post("/api/credits/received/{credit_id}")
+def credits_received(credit_id: int, request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        invoice_store.mark_credit_received(credit_id)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error updating credit: {e}", status_code=500)
+    return {"status": "updated"}
+
+
+@app.post("/api/credits/delete/{credit_id}")
+def credits_delete(credit_id: int, request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    try:
+        invoice_store.delete_credit(credit_id)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error deleting credit: {e}", status_code=500)
+    return {"status": "deleted"}
+
+
 @app.post("/api/inventory/set-paid/{record_id}")
 async def inventory_set_paid(record_id: int, request: Request):
     """The מנהלת חשבונות tab's שולם toggle -- {"paid": true|false}."""

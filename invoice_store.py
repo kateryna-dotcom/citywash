@@ -79,6 +79,21 @@ def init_db():
                   AND subject ~ 'העברה\s*(לבנק|בנקאית)|כרטסת|גיול\s*חוב|^\s*קבלה\y|^\s*הזמנה\y|ריכוז\s*רכישות|ריצ.?י\s*שאיבות'
                   AND subject !~ 'זיכוי'
             """)
+            # Credits Kateryna is still waiting for from a supplier (the
+            # מנהלת חשבונות tab's red "מחכה לזיכוי" mark). received_at NULL =
+            # still open; invoice_number is free text so a credit can refer
+            # to an invoice outside the current filter or with no record.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS pending_credits (
+                    id SERIAL PRIMARY KEY,
+                    supplier_domain TEXT NOT NULL,
+                    invoice_number TEXT,
+                    amount NUMERIC,
+                    note TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    received_at TIMESTAMPTZ
+                );
+            """)
         conn.commit()
 
 
@@ -327,4 +342,44 @@ def delete_record(record_id: int):
     with _get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM invoice_records WHERE id=%s", (record_id,))
+        conn.commit()
+
+
+def list_open_credits() -> list:
+    with _get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, supplier_domain, invoice_number, amount, note, created_at
+                FROM pending_credits WHERE received_at IS NULL ORDER BY created_at
+            """)
+            rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        if r["amount"] is not None:
+            r["amount"] = float(r["amount"])
+    return rows
+
+
+def create_credit(supplier_domain: str, invoice_number: str, amount, note: str) -> int:
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO pending_credits (supplier_domain, invoice_number, amount, note)
+                VALUES (%s, %s, %s, %s) RETURNING id
+            """, (supplier_domain, invoice_number or None, amount, note or None))
+            new_id = cur.fetchone()[0]
+        conn.commit()
+    return new_id
+
+
+def mark_credit_received(credit_id: int):
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE pending_credits SET received_at=now() WHERE id=%s", (credit_id,))
+        conn.commit()
+
+
+def delete_credit(credit_id: int):
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM pending_credits WHERE id=%s", (credit_id,))
         conn.commit()
