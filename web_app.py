@@ -169,6 +169,14 @@ def _startup():
     except Exception as e:  # noqa: BLE001
         print(f"[startup] ברקו סנטס re-parse backfill skipped: {e}")
 
+    try:
+        # A PDF holding several invoices becomes one card per invoice --
+        # see invoice_ingest.split_pdf_by_invoice. Idempotent.
+        split = invoice_ingest.split_existing_records()
+        print(f"[startup] multi-invoice PDF split: {split} invoice(s) added")
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] multi-invoice PDF split skipped: {e}")
+
     # Background polling for new supplier invoices -- runs regardless of
     # whether anyone has the dashboard open. If GMAIL_* env vars aren't set
     # yet, each cycle just logs and retries later instead of crashing.

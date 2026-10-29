@@ -245,6 +245,21 @@ def get_record(record_id: int) -> dict:
     return dict(row) if row else None
 
 
+def replace_pdf_content(record_id: int, pdf_data: bytes, raw_text: str,
+                        invoice_number: str, line_items: list):
+    """Used when a stored PDF turned out to hold several invoices and was
+    split: this record keeps just the first one."""
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE invoice_records SET pdf_data=%s, raw_text=%s, invoice_number=%s, "
+                "line_items=%s, updated_at=now() WHERE id=%s",
+                (psycopg2.Binary(pdf_data), raw_text, invoice_number,
+                 psycopg2.extras.Json(line_items) if line_items is not None else None, record_id),
+            )
+        conn.commit()
+
+
 def update_line_items(record_id: int, line_items: list):
     """Full replace of an invoice's line_items -- used after re-running the
     parser against the already-stored raw_text (e.g. following a parser
