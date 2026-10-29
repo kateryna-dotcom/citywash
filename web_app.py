@@ -63,6 +63,17 @@ app.add_middleware(
     max_age=60 * 60 * 24 * 14,  # 2 weeks
 )
 
+
+@app.middleware("http")
+async def _no_cache_html(request: Request, call_next):
+    """Pages must never be served from the browser's cache -- live
+    2026-10-29, a fix to the בירוקרטיה bulk upload was deployed but the
+    browser kept running the old page, so the same error kept showing."""
+    response = await call_next(request)
+    if response.headers.get("content-type", "").startswith("text/html"):
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+    return response
+
 BASE_DIR = os.path.dirname(__file__)
 HTML_PATH = os.path.join(BASE_DIR, "chat_ui.html")
 DASHBOARD_HTML_PATH = os.path.join(BASE_DIR, "dashboard.html")
