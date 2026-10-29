@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 import requests
-from pypdf import PdfReader
+from pypdf import PdfReader, PdfWriter
 
 import branches
 import companies
@@ -1065,9 +1065,80 @@ def guess_invoice_number(subject: str, text: str, pdf_bytes: bytes = None) -> st
     return ""
 
 
+def _page_texts(pdf_bytes: bytes) -> list:
+    """Text of each page: pdftotext -layout pages (form-feed separated) when
+    they line up with the page count, otherwise pypdf page by page."""
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    count = len(reader.pages)
+    layout = _extract_pdf_text_layout(pdf_bytes)
+    pages = layout.split("\f") if layout else []
+    if len(pages) >= count and all(p.strip() for p in pages[:count]):
+        return pages[:count]
+    return [(p.extract_text() or "") for p in reader.pages]
+
+
+# Same label as _INVOICE_NUMBER_RE but with the number BEFORE it -- the
+# visual (right-to-left) order pdftotext -layout can give, "39533 חשבונית מס".
+_INVOICE_NUMBER_BEFORE_RE = re.compile(r"(?<![\d.,])(\d{4,})\s*:?\s*חשבונית\s*מס(?!\s*\d)")
+
+
+def _page_invoice_number(text: str) -> str:
+    m = _INVOICE_NUMBER_BEFORE_RE.search(text or "")
+    return guess_invoice_number("", text) or (m.group(1) if m else "")
+
+
+def split_pdf_by_invoice(pdf_bytes: bytes) -> list:
+    """One PDF sometimes holds several invoices, one after another (live
+    2026-10-29, victoriascent: two invoices came in as a single card).
+    Groups consecutive pages by the invoice number printed on them -- a
+    page without a number belongs to the invoice before it, the same number
+    repeated (e.g. גלאור's מקור + העתק) stays one invoice. Returns one PDF
+    per invoice, or [] when the file holds just one."""
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        if len(reader.pages) < 2:
+            return []
+        numbers = [_page_invoice_number(t) for t in _page_texts(pdf_bytes)]
+    except Exception:  # noqa: BLE001
+        return []
+    groups = []
+    current = None
+    for idx, number in enumerate(numbers):
+        if not groups or (number and current and number != current):
+            groups.append([idx])
+        else:
+            groups[-1].append(idx)
+        if number:
+            current = number
+    if len(groups) < 2:
+        return []
+    parts = []
+    for pages in groups:
+        writer = PdfWriter()
+        for idx in pages:
+            writer.add_page(reader.pages[idx])
+        buf = io.BytesIO()
+        writer.write(buf)
+        parts.append(buf.getvalue())
+    return parts
+
+
 def _create_pdf_record(record_key, supplier_domain, sender, subject, received_at,
-                       pdf_filename, pdf_bytes, html_body, multi=False):
-    """Extracts and stores one invoice PDF as a needs_review record."""
+                       pdf_filename, pdf_bytes, html_body, multi=False, split=True):
+    """Extracts and stores one invoice PDF as a needs_review record -- or,
+    when the PDF holds several invoices, one record per invoice (the first
+    under record_key, the rest under "<record_key>#<n>"). Returns how many
+    records were created."""
+    parts = split_pdf_by_invoice(pdf_bytes) if split else []
+    if parts:
+        made = 0
+        for n, part in enumerate(parts):
+            key = record_key if n == 0 else f"{record_key}#{n}"
+            if n and invoice_store.message_already_processed(key):
+                continue
+            made += _create_pdf_record(key, supplier_domain, sender, subject, received_at,
+                                       pdf_filename, part, html_body, multi=True, split=False)
+        return made
     text = _extract_pdf_text(pdf_bytes)
     line_items = parse_line_items(supplier_domain, text, pdf_bytes=pdf_bytes)
     # The branch is sometimes only named in the email body rather
@@ -1105,6 +1176,38 @@ def _create_pdf_record(record_key, supplier_domain, sender, subject, received_at
         "line_items": line_items or None,
         "status": "needs_review",
     })
+    return 1
+
+
+def split_existing_records() -> int:
+    """Startup backfill for PDFs ingested before split_pdf_by_invoice
+    existed: every invoice still awaiting review whose PDF holds several
+    invoices keeps the first one, and the others become their own records.
+    Idempotent -- once split, a record's PDF holds a single invoice."""
+    added = 0
+    for r in invoice_store.list_records(limit=1000):
+        if r.get("status") != "needs_review" or not r.get("pdf_filename"):
+            continue
+        pdf_bytes = invoice_store.get_pdf_data(r["id"])
+        parts = split_pdf_by_invoice(pdf_bytes) if pdf_bytes else []
+        if not parts:
+            continue
+        domain = r.get("supplier_domain")
+        for n, part in enumerate(parts[1:], start=1):
+            key = f"{r['gmail_message_id']}#{n}"
+            if invoice_store.message_already_processed(key):
+                continue
+            added += _create_pdf_record(key, domain, r.get("sender_email"), r.get("subject"),
+                                        r.get("received_at"), r.get("pdf_filename"), part, "",
+                                        multi=True, split=False)
+        first = parts[0]
+        text = _extract_pdf_text(first)
+        invoice_store.replace_pdf_content(
+            r["id"], first, text,
+            guess_invoice_number("", text, pdf_bytes=first) or r.get("invoice_number"),
+            parse_line_items(domain, text, pdf_bytes=first) or None,
+        )
+    return added
 
 
 # Message ids already checked for extra PDFs in this process -- so the
@@ -1138,9 +1241,8 @@ def _backfill_extra_pdfs(message_id: str) -> int:
         if invoice_store.message_already_processed(record_key):
             continue
         pdf_bytes = gmail_client.get_attachment_bytes(message_id, att["attachmentId"])
-        _create_pdf_record(record_key, supplier_domain, sender, subject, received_at,
-                           att["filename"], pdf_bytes, "", multi=True)
-        added += 1
+        added += _create_pdf_record(record_key, supplier_domain, sender, subject, received_at,
+                                    att["filename"], pdf_bytes, "", multi=True)
     return added
 
 
@@ -1206,11 +1308,10 @@ def process_new_invoices(lookback_days: int = 30) -> dict:
                 for n, att in enumerate(pdf_attachments):
                     record_key = message_id if n == 0 else f"{message_id}:{n}"
                     pdf_bytes = gmail_client.get_attachment_bytes(message_id, att["attachmentId"])
-                    _create_pdf_record(
+                    created += _create_pdf_record(
                         record_key, supplier_domain, sender, subject, received_at,
                         att["filename"], pdf_bytes, "", multi=len(pdf_attachments) > 1,
                     )
-                    created += 1
                 continue
             elif supplier_domain in gmail_client.LINK_INVOICE_DOMAINS:
                 # No attachment at all -- this supplier delivers the PDF via
@@ -1243,11 +1344,10 @@ def process_new_invoices(lookback_days: int = 30) -> dict:
                 created += 1
                 continue
 
-            _create_pdf_record(
+            created += _create_pdf_record(
                 message_id, supplier_domain, sender, subject, received_at,
                 pdf_filename, pdf_bytes, html_body,
             )
-            created += 1
         except Exception as e:  # noqa: BLE001
             errors.append(f"{message_id}: {e}")
 
