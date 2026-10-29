@@ -778,7 +778,7 @@ function parseBulkRow(raw) {
   const amountRaw = String(raw["סכום שכר"] ?? "").trim();
   const amountNum = (amountRaw.match(/\d[\d,]*(\.\d+)?/) || [""])[0].replace(/,/g, "");
   const amountQual = (amountRaw.match(/ברוטו|נטו/) || [""])[0];
-  const amountRest = amountRaw.replace(/\d[\d,]*(\.\d+)?/, "").replace(/ברוטו|נטו|₪|ש"?ח|ש''ח|\s/g, "");
+  const amountRest = amountRaw.replace(/\d[\d,]*(\.\d+)?/, "").replace(/ברוטו|נטו|₪|ש"?ח|ש''ח|\s|[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
   const AMOUNT = amountQual ? `${amountNum} ${amountQual}` : amountNum;
   if (!amountNum || amountRest) errors.push("סכום שכר לא תקין");
 
