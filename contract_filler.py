@@ -43,6 +43,30 @@ def _drop_paragraph_containing(xml: str, marker: str) -> str:
     return xml[:start] + xml[end:]
 
 
+_SALARY_QUALIFIER_RE = re.compile(r"ברוטו|נטו")
+
+
+def split_salary_amount(amount) -> tuple:
+    """"15000 נטו" / "2500ברוטו" / "15,000" -> ("15000", "נטו" | "ברוטו" | "")."""
+    text = str(amount or "")
+    qual = _SALARY_QUALIFIER_RE.search(text)
+    num = re.search(r"\d[\d,]*(?:\.\d+)?", text)
+    return (num.group(0).replace(",", "") if num else text.strip(), qual.group(0) if qual else "")
+
+
+def _apply_salary_qualifier(xml: str, fields: dict) -> str:
+    """Puts a ברוטו/נטו written with the amount right after the ₪ that
+    follows the amount token in the template ("... בסך של 15000 ₪ נטו.")."""
+    for key in ("MONTHLY_SALARY", "HOURLY_WAGE"):
+        if key not in fields:
+            continue
+        number, qual = split_salary_amount(fields[key])
+        fields[key] = number
+        if qual:
+            xml = xml.replace("{{%s}} ₪" % key, "{{%s}} ₪ %s" % (key, qual))
+    return xml
+
+
 def fill_document(template_path: str, fields: dict) -> bytes:
     """
     Generic filler: replaces every {{TOKEN}} in the template with fields[TOKEN].
@@ -89,6 +113,9 @@ def fill_contract(template_path: str, fields: dict, pay_type: str) -> bytes:
     else:
         raise ValueError("pay_type must be 'hourly' or 'monthly'")
 
+    fields = dict(fields)
+    xml = _apply_salary_qualifier(xml, fields)
+
     for key, value in fields.items():
         xml = xml.replace("{{%s}}" % key, str(value))
 
@@ -129,6 +156,9 @@ def fill_worker_contract(template_path: str, fields: dict, pay_type: str, schedu
         xml = _drop_paragraph_containing(xml, SHIFT_SCHEDULE_MARKER)
     else:
         raise ValueError("schedule_type must be 'fixed' or 'shift'")
+
+    fields = dict(fields)
+    xml = _apply_salary_qualifier(xml, fields)
 
     for key, value in fields.items():
         xml = xml.replace("{{%s}}" % key, str(value))

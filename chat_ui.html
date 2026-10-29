@@ -771,8 +771,16 @@ function parseBulkRow(raw) {
   const PAY_TYPE = BULK_PAY_MAP[payRaw];
   if (!PAY_TYPE) errors.push(`סוג שכר לא מזוהה: "${payRaw}" (צריך להיות חודשי או שעתי)`);
 
-  const AMOUNT = String(raw["סכום שכר"] ?? "").trim();
-  if (!AMOUNT || isNaN(Number(AMOUNT))) errors.push("סכום שכר לא תקין");
+  // The amount may carry ברוטו/נטו and a currency mark, written with or
+  // without a space ("2500 ברוטו", "15000נטו", "15,000 ₪ נטו") -- Kateryna
+  // 2026-10-29. Kept as "<number> <ברוטו|נטו>"; the contract prints the
+  // word after the ₪ (see contract_filler.split_salary_amount).
+  const amountRaw = String(raw["סכום שכר"] ?? "").trim();
+  const amountNum = (amountRaw.match(/\d[\d,]*(\.\d+)?/) || [""])[0].replace(/,/g, "");
+  const amountQual = (amountRaw.match(/ברוטו|נטו/) || [""])[0];
+  const amountRest = amountRaw.replace(/\d[\d,]*(\.\d+)?/, "").replace(/ברוטו|נטו|₪|ש"?ח|ש''ח|\s/g, "");
+  const AMOUNT = amountQual ? `${amountNum} ${amountQual}` : amountNum;
+  if (!amountNum || amountRest) errors.push("סכום שכר לא תקין");
 
   const JOB_TITLE = String(raw["תפקיד (לעובד בלבד)"] ?? "").trim();
   const scheduleRaw = String(raw["משמרת (לעובד בלבד)"] ?? "").trim();
