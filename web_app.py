@@ -177,6 +177,15 @@ def _startup():
     except Exception as e:  # noqa: BLE001
         print(f"[startup] multi-invoice PDF split skipped: {e}")
 
+    try:
+        # Hand-transcribed invoices from text-less scans (manual_invoices.py)
+        # -- only the ones not already in מלאי are added. Idempotent.
+        import manual_invoices
+        result = manual_invoices.import_manual_invoices()
+        print(f"[startup] manual invoices: added {result['added']}, already there {result['skipped']}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] manual invoices import skipped: {e}")
+
     # Background polling for new supplier invoices -- runs regardless of
     # whether anyone has the dashboard open. If GMAIL_* env vars aren't set
     # yet, each cycle just logs and retries later instead of crashing.
