@@ -146,6 +146,62 @@ def _backfill_reparse_barco_scents():
     print(f"[startup] ברקו סנטס / גלאור re-parse backfill: {fixed} invoice(s) updated")
 
 
+def _backfill_pavilion_skus():
+    """Repairs pavilion-spark invoices parsed before
+    invoice_ingest.fix_pavilion_item_sku existed, where a per-invoice
+    numeric reference was taken as the sku and the real product code was
+    left in the description (Kateryna 2026-11-04: "כשאני עושה התאמות הוא
+    לא זוכר את זה ואז חשבונית הבאה גם שואלת מה זה").
+
+    1. Every fix she already saved under one of those throwaway numbers is
+       copied onto the real product code, so it's recognized from now on.
+    2. Open invoices get their sku/description corrected and their
+       not-yet-confirmed lines re-matched against the saved fixes.
+    Handled invoices (status 'ok') are only read, never modified.
+    Idempotent: once fixed, a line's sku is no longer all digits."""
+    domain = "pavilion-spark.co.il"
+    records = [r for r in invoice_store.list_records_for_report()
+               if r.get("supplier_domain") == domain and r.get("line_items")]
+    learned = item_mapping_store.get_mappings_for_supplier(domain)
+    pre_existing = set(learned)
+    copied = 0
+    for r in records:
+        items = r["line_items"]
+        for it, keys in zip(items, item_matcher.invoice_line_keys(items)):
+            fixed = invoice_ingest.fix_pavilion_item_sku(dict(it))
+            new_sku = item_matcher.clean_key(fixed.get("sku") or "")
+            if not new_sku or new_sku == item_matcher.clean_key(it.get("sku") or "") \
+                    or new_sku in pre_existing:
+                continue
+            old = next((learned[k] for k in keys if k in learned), None)
+            if not old:
+                continue
+            item_mapping_store.upsert_mapping(
+                domain, new_sku, old["action"], catalog_code=old.get("catalog_code"),
+                catalog_name=old.get("catalog_name"), notes=old.get("notes"))
+            copied += 1
+    learned = item_mapping_store.get_mappings_for_supplier(domain)
+
+    repaired = 0
+    for r in records:
+        if r.get("status") not in ("needs_review", "no_pdf_found"):
+            continue
+        items = r["line_items"]
+        fixed_items = [invoice_ingest.fix_pavilion_item_sku(dict(it)) for it in items]
+        if [it.get("sku") for it in fixed_items] == [it.get("sku") for it in items]:
+            continue
+        rematched = item_matcher.match_invoice_items(fixed_items, learned)
+        out = []
+        for orig, fixed, new in zip(items, fixed_items, rematched):
+            # A line she already resolved by hand on this invoice keeps
+            # her answer -- only its sku/description are corrected.
+            out.append(fixed if orig.get("match_source") in ("matched", "skip") else new)
+        invoice_store.update_line_items(r["id"], out)
+        repaired += 1
+    print(f"[startup] pavilion sku backfill: {copied} saved fix(es) re-keyed, "
+          f"{repaired} open invoice(s) repaired")
+
+
 @app.on_event("startup")
 def _startup():
     # Creates the pension_records table if it doesn't exist yet. If the DB
@@ -179,6 +235,11 @@ def _startup():
         _backfill_reparse_barco_scents()
     except Exception as e:  # noqa: BLE001
         print(f"[startup] ברקו סנטס re-parse backfill skipped: {e}")
+
+    try:
+        _backfill_pavilion_skus()
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] pavilion sku backfill skipped: {e}")
 
     try:
         # A PDF holding several invoices becomes one card per invoice --
