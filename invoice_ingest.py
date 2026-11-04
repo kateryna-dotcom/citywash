@@ -569,16 +569,49 @@ _PAVILION_LAYOUT_ROW_RE = re.compile(
 )
 _PAVILION_INVOICE_RE = re.compile(r'SI\d{6,}')
 
+# Some pavilion invoices (live 2026-11-03, SI266037000) carry an extra
+# numeric order/delivery-note reference between the product code and the
+# SH document ref, so the regexes above capture THAT number as the sku and
+# leave the real product code stuck at the end of the description, e.g.
+#   desc "...נוזל קירור אדום 110AF5050G12LT 2", sku "104150321"
+# The number changes on every invoice, so a match Kateryna confirmed was
+# saved under it and never recognized again -- the same product was asked
+# about on every invoice. Pavilion's real product codes always contain
+# letters (110MAT5019BK, 110TIRE8307, VSNR14-PLS...), so when the captured
+# sku is all digits and the description ends with such a code (optionally
+# followed by a small line number), that code is the sku.
+_PAVILION_TRAILING_CODE_RE = re.compile(
+    r'\s+(?P<code>(?=[A-Za-z0-9\-]*[A-Za-z])(?=[A-Za-z0-9\-]*\d)[A-Za-z0-9][A-Za-z0-9\-]{3,})'
+    r'(?:\s+\d{1,4})?\s*$'
+)
+
+
+def fix_pavilion_item_sku(item: dict) -> dict:
+    """Moves pavilion's real product code out of the description into
+    "sku" when the parser captured a numeric reference there instead (see
+    _PAVILION_TRAILING_CODE_RE). Returns the item (modified in place);
+    leaves it alone when the sku already looks like a product code."""
+    sku = str(item.get("sku") or "").strip()
+    desc = item.get("description") or ""
+    if sku and not sku.isdigit():
+        return item
+    m = _PAVILION_TRAILING_CODE_RE.search(desc)
+    if not m:
+        return item
+    item["sku"] = m.group("code")
+    item["description"] = desc[:m.start()].strip()
+    return item
+
 
 def _parse_pavilion_layout(text: str) -> list:
     items = []
     for m in _PAVILION_LAYOUT_ROW_RE.finditer(text):
         qty, net, total = _num(m.group("qty")), _num(m.group("net_price")), _num(m.group("total"))
         confident = None not in (qty, net, total) and abs(round(qty * net, 2) - total) < 0.5
-        items.append({
+        items.append(fix_pavilion_item_sku({
             "sku": m.group("sku"), "description": m.group("desc").strip(),
             "quantity": qty, "unit_price": net, "total": total, "confident": confident,
-        })
+        }))
     return items
 
 
@@ -610,10 +643,10 @@ def parse_pavilion_spark(text: str, pdf_bytes: bytes = None) -> list:
     for m in _PAVILION_ROW_RE.finditer(text):
         qty, net, total = _num(m.group("qty")), _num(m.group("net_price")), _num(m.group("total"))
         confident = None not in (qty, net, total) and abs(round(qty * net, 2) - total) < 0.5
-        items.append({
+        items.append(fix_pavilion_item_sku({
             "sku": m.group("sku"), "description": m.group("desc").strip(),
             "quantity": qty, "unit_price": net, "total": total, "confident": confident,
-        })
+        }))
     return items
 
 
