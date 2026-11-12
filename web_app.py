@@ -1440,10 +1440,10 @@ async def inventory_mark(record_id: int, request: Request):
 
 @app.post("/api/inventory/delete/{record_id}")
 def inventory_delete(record_id: int, request: Request):
-    """Removes an invoice card from the מלАי review list entirely -- for
-    ones she doesn't need there (duplicates, irrelevant, already handled
-    another way). Doesn't touch anything already learned in item_mappings
-    from this invoice's line items."""
+    """Removes an invoice card from the מלАי review list -- for ones she
+    doesn't need there (duplicates, irrelevant, already handled another
+    way). Hidden rather than deleted, so the next mail check never brings
+    it back (see invoice_store.delete_record)."""
     unauthorized = _require_api_auth(request)
     if unauthorized:
         return unauthorized

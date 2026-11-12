@@ -268,7 +268,7 @@ def update_line_items(record_id: int, line_items: list):
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE invoice_records SET line_items=%s, "
-                "status = CASE WHEN status = 'no_pdf_found' THEN status ELSE 'needs_review' END, "
+                "status = CASE WHEN status IN ('no_pdf_found', 'irrelevant') THEN status ELSE 'needs_review' END, "
                 "updated_at=now() WHERE id=%s",
                 (psycopg2.extras.Json(line_items) if line_items is not None else None, record_id),
             )
@@ -350,13 +350,20 @@ def update_status(record_id: int, status: str, note: str = None):
 
 
 def delete_record(record_id: int):
-    """Removes an invoice card from the review list entirely (e.g. she
-    doesn't need it -- a duplicate, or not relevant to her). Does not
-    touch item_mappings, so anything already learned from this invoice's
-    line items stays intact."""
+    """Removes an invoice card from the review list (e.g. she doesn't need
+    it -- a duplicate, or not relevant to her). The row is kept, marked
+    'irrelevant' (hidden everywhere, like a bank-transfer receipt), rather
+    than deleted: live 2026-11-12, a deleted card came straight back on the
+    next mail check, because with no row left for its Gmail message the
+    scan treated it as new. The PDF bytes are dropped -- they're no longer
+    needed. Does not touch item_mappings."""
     with _get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM invoice_records WHERE id=%s", (record_id,))
+            cur.execute(
+                "UPDATE invoice_records SET status='irrelevant', note='נמחק ע\"י המשתמשת', "
+                "pdf_data=NULL, updated_at=now() WHERE id=%s",
+                (record_id,),
+            )
         conn.commit()
 
 
