@@ -87,6 +87,13 @@ def cashontab_code_hint(branch):
     return CASHONTAB_CODE_DISAMBIGUATION.get(branch)
 
 
+# Other spellings of a branch name seen on invoices.
+BRANCH_ALT_SPELLINGS = {
+    # ביתן ספארק's delivery address, 2026-11-12: "מושב שדה חמד".
+    "שדי חמד": ["שדה חמד"],
+}
+
+
 def detect_branch(text: str) -> str | None:
     """Best-effort guess at which branch an invoice belongs to, by checking
     whether every word of a branch name shows up somewhere in the extracted
@@ -106,6 +113,7 @@ def detect_branch(text: str) -> str | None:
         # Invoices also spell קריית with a single yod ("קרית מלאכי" on
         # גלאור's bill-to block, 2026-10-26).
         spellings = [words, [w.replace("קריית", "קרית") for w in words]]
+        spellings += [alt.split() for alt in BRANCH_ALT_SPELLINGS.get(branch, [])]
         if any(all(w in text for w in ws) for ws in spellings):
             candidates.append(branch)
         elif len(words) > 1 and re.search(rf"סניף\s+{re.escape(words[0])}\b", text):
@@ -129,6 +137,7 @@ def detect_branch(text: str) -> str | None:
     # "חבצלת השרון" printed whole in the address.
     def contiguous(b):
         name = b.replace('"', "")
-        return name in text or name.replace("קריית", "קרית") in text
+        return (name in text or name.replace("קריית", "קרית") in text
+                or any(alt in text for alt in BRANCH_ALT_SPELLINGS.get(b, [])))
     candidates.sort(key=lambda b: (len(b.split()), contiguous(b)), reverse=True)
     return candidates[0]

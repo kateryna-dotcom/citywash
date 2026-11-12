@@ -568,6 +568,10 @@ _PAVILION_LAYOUT_ROW_RE = re.compile(
     re.MULTILINE,
 )
 _PAVILION_INVOICE_RE = re.compile(r'SI\d{6,}')
+# Their credit notes ("חשבונית זיכוי מרכזת CR267013336") also print the SI
+# number of each credited invoice on every row -- the CR number is the
+# document's own, so it has to win.
+_PAVILION_CREDIT_RE = re.compile(r'CR\d{6,}')
 
 
 def _parse_pavilion_layout(text: str) -> list:
@@ -599,7 +603,44 @@ _PAVILION_ROW_RE = re.compile(
 )
 
 
+# Credit note rows (חשבונית זיכוי מרכזת, live 2026-11-12, CR267013336): the
+# description wraps onto the next line(s), and the row ends with the
+# credited invoice's SI number, a line no., the order no. and the SH
+# delivery note before the row no.:
+#   492.00 שח41.00 50.00% שח82.00 יח12 HOT SHINE TIREמל טריגר710מבריק צמיגים
+#   SPRAY
+#   MGRG12024 SI266037001 4 1301500120 SH26082300 1
+_PAVILION_CREDIT_ROW_RE = re.compile(
+    r'(?P<total>[\d,]+\.\d{2})\s*שח'
+    r'(?P<net_price>[\d,]+\.\d{2})\s*'
+    r'(?P<discount>[\d,]+\.\d{2})%\)?\s*שח'
+    r'(?P<gross_price>[\d,]+\.\d{2})\s*יח'
+    r'(?P<qty>\d+)\s*'
+    r'(?P<desc>.*?)\n'
+    r'(?P<sku>[A-Za-z0-9][A-Za-z0-9\-]{2,})\s+SI\d+\s+\d+\s+\d+\s+SH\d+\s+\d+[ \t]*$',
+    re.MULTILINE | re.DOTALL,
+)
+
+
+def _parse_pavilion_credit(text: str) -> list:
+    # Only the "מקור" copy -- the PDF repeats everything as "העתק".
+    text = _galor_original_part(text)
+    items = []
+    for m in _PAVILION_CREDIT_ROW_RE.finditer(text):
+        qty, net, total = _num(m.group("qty")), _num(m.group("net_price")), _num(m.group("total"))
+        confident = None not in (qty, net, total) and abs(round(qty * net, 2) - total) < 0.5
+        items.append({
+            "sku": m.group("sku"), "description": re.sub(r"\s+", " ", m.group("desc")).strip(),
+            "quantity": qty, "unit_price": net, "total": total, "confident": confident,
+        })
+    return items
+
+
 def parse_pavilion_spark(text: str, pdf_bytes: bytes = None) -> list:
+    if _PAVILION_CREDIT_RE.search(text or ""):
+        items = _parse_pavilion_credit(text)
+        if items:
+            return items
     if pdf_bytes:
         layout_text = _extract_pdf_text_layout(pdf_bytes)
         if layout_text:
@@ -1042,7 +1083,7 @@ def guess_invoice_number(subject: str, text: str, pdf_bytes: bytes = None) -> st
         # pavilion-spark (Priority software) prints the invoice number as
         # "SI<digits>" with no "חשבונית מס" label nearby it in the
         # extracted text order -- catch it as a fallback.
-        m = _PAVILION_INVOICE_RE.search(source)
+        m = _PAVILION_CREDIT_RE.search(source) or _PAVILION_INVOICE_RE.search(source)
         if m:
             return m.group(0)
         # grow.security -- see _TRANSACTION_NUMBER_RE's comment.
