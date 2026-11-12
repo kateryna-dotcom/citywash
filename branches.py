@@ -38,6 +38,8 @@ BRANCHES = [
     "קריית גת",
     "פתח תקווה מפגש השרון",
     "בית שמש",
+    # Opened in Cash On Tab 2026-11-12 (Kateryna).
+    "חיפה",
 ]
 
 # Not real Cash On Tab branches -- expense categories Kateryna wants to file
