@@ -1152,12 +1152,14 @@ def inventory_reparse(record_id: int, request: Request):
         # Only backfills a blank invoice_number (e.g. grow.security records
         # ingested before the עסקה-subject fallback existed) -- never
         # overwrites one she may have corrected by hand.
-        if not record.get("invoice_number"):
-            invoice_number = invoice_ingest.guess_invoice_number(
-                record.get("subject") or "", record.get("raw_text") or "", pdf_bytes=pdf_bytes
-            )
-            if invoice_number:
-                invoice_store.update_invoice_number(record_id, invoice_number)
+        guessed = invoice_ingest.guess_invoice_number(
+            record.get("subject") or "", record.get("raw_text") or "", pdf_bytes=pdf_bytes
+        )
+        # Also replaces a wrongly stored SI number on a ביתן ספארק credit note
+        # with its own CR number (the SI is the credited invoice's).
+        if guessed and (not record.get("invoice_number")
+                        or (guessed.startswith("CR") and record.get("invoice_number") != guessed)):
+            invoice_store.update_invoice_number(record_id, guessed)
     except Exception as e:  # noqa: BLE001
         return Response(f"Error reparsing invoice: {e}", status_code=500)
     return {"status": "reparsed", "item_count": len(line_items or [])}
