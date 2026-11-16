@@ -175,10 +175,14 @@ def _num(s):
 # pdftotext -layout output -- pypdf's plain extract_text() badly truncates
 # this invoice's wide table (it was dropping half the description, which
 # is why CW010078 used to come through unmatchable against the catalogue).
+# The unit isn't always יח' -- live 2026-11-16 (IN264003409) a row sold by
+# the pack read "12.00 מאר" (מארז, cut off), and the row was skipped. Any
+# short Hebrew unit word is accepted now.
+_EMI_UNIT = r'[\u05d0-\u05ea]{1,5}[\'"׳]?'
 _EMI_LAYOUT_ROW_RE = re.compile(
     r'(?P<total>[\d,]+\.\d{2})\s*'
     r'(?P<unit_price>[\d,]+\.\d{2})\s*ש"ח\s*'
-    r'(?P<qty>[\d,]+\.\d{2})\s*יח\'\s*'
+    r'(?P<qty>[\d,]+\.\d{2})\s*' + _EMI_UNIT + r'\s*'
     r'(?P<desc>.+?)\s*'
     r'(?P<sku>[A-Za-z]{1,3}\d{5,})\s+'
     r'(?P<row_num>\d+)\s*$',
@@ -190,7 +194,7 @@ _EMI_LAYOUT_ROW_RE = re.compile(
 # an invoice ingested before this fix) or pdftotext fails for some reason.
 _EMI_ROW_RE = re.compile(
     r'(?P<total>[\d,]+\.\d{2})\s*ש"ח'
-    r'(?P<unit_price>[\d,]+\.\d{2})\s*יח'
+    r'(?P<unit_price>[\d,]+\.\d{2})\s*' + _EMI_UNIT + r'\s*'
     r'(?P<qty>[\d,]+\.\d{2})\s*'
     r'(?P<middle>.*?)'
     r'(?P<sku>[A-Za-z]{1,3}\d{5,})\s+(?P<row_num>\d+)\s*$',
