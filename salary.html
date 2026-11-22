@@ -142,7 +142,7 @@
       <b>⏱ שעות עובדים (Cash On Tab)</b>
       <span class="hint" id="attInfo">העלי את קובץ השעות שהורדת מ-Cash On Tab לבדיקת טעויות</span>
       <button class="sbtn" onclick="document.getElementById('attFile').click()">📤 העלאת קובץ שעות</button>
-      <input type="file" id="attFile" accept=".pdf,.xlsx,.xls,.csv" style="display:none" onchange="Att.load(this.files[0]); this.value=''">
+      <input type="file" id="attFile" accept=".pdf,.xlsx,.xls,.csv" style="display:none" onchange="Att.in('').load(this.files[0]); this.value=''">
       <span class="att-msg" id="attMsg"></span>
     </div>
     <div class="att-res" id="attRes"></div>
@@ -391,9 +391,17 @@ const Sheet = {
         <label>חודש: <input type="month" id="sheetMonth" value="${this.month}"></label>
         <button class="sbtn" id="btnImport">⬆ ייבוא שעות (PDF / אקסל)</button>
         <button class="sbtn" id="btnCopyPrev">העתק עובדים מחודש קודם</button>
+        <button class="sbtn" id="btnAttCheck">📤 בדיקת קובץ שעות</button>
+        <input type="file" id="sAttFile" accept=".pdf,.xlsx,.xls,.csv" style="display:none">
         <button class="sbtn primary" id="btnExport">⬇ הורדת אקסל</button>
         <span class="save-state ${this.loadError ? "err" : ""}" id="saveState">${state}</span>
         <input type="file" id="importFile" accept=".pdf,.xlsx,.xls" style="display:none">
+      </div>
+      <div id="sAttBox" class="att" style="display:none;margin-top:10px">
+        <div class="att-bar"><b>⏱ בדיקת שעות</b><span class="hint" id="sAttInfo"></span>
+          <span class="att-msg" id="sAttMsg"></span>
+          <button class="sbtn" id="sAttClose" style="margin-inline-start:auto">✕ סגירה</button></div>
+        <div class="att-res" id="sAttRes"></div>
       </div>
       <div id="pickSheet"></div>
       <div class="sheet-wrap"><table class="sheet">
@@ -435,6 +443,15 @@ const Sheet = {
     }));
     root.querySelector("#btnExport").addEventListener("click", () => this.exportXlsx());
     root.querySelector("#btnCopyPrev").addEventListener("click", () => this.copyPrev());
+    const attFile = root.querySelector("#sAttFile");
+    root.querySelector("#btnAttCheck").addEventListener("click", () => attFile.click());
+    attFile.addEventListener("change", () => {
+      if (!attFile.files[0]) return;
+      root.querySelector("#sAttBox").style.display = "";
+      Att.in("s").load(attFile.files[0]);
+      attFile.value = "";
+    });
+    root.querySelector("#sAttClose").addEventListener("click", () => { root.querySelector("#sAttBox").style.display = "none"; });
     const file = root.querySelector("#importFile");
     root.querySelector("#btnImport").addEventListener("click", () => file.click());
     file.addEventListener("change", () => { if (file.files[0]) this.importXlsx(file.files[0]); });
@@ -695,10 +712,18 @@ const ATT_PROBLEMS = {
 };
 const Att = {
   rows: [], filter: "bad", fileName: "",
+  // Where results go: the main page's bar, or the company sheet (prefix "s").
+  ids: { msg: "attMsg", res: "attRes", info: "attInfo" },
+  el(k) { return document.getElementById(this.ids[k]); },
+  in(prefix) {
+    this.ids = prefix ? { msg: prefix + "AttMsg", res: prefix + "AttRes", info: prefix + "AttInfo" }
+                      : { msg: "attMsg", res: "attRes", info: "attInfo" };
+    return this;
+  },
 
   load(file) {
     if (!file) return;
-    const msg = document.getElementById("attMsg");
+    const msg = this.el("msg");
     msg.className = "att-msg"; msg.textContent = "קורא...";
     if (/\.pdf$/i.test(file.name) || file.type === "application/pdf") { this.loadPdf(file); return; }
     const reader = new FileReader();
@@ -713,7 +738,7 @@ const Att = {
         this.render();
       } catch (err) {
         msg.className = "att-msg err"; msg.textContent = err.message || String(err);
-        document.getElementById("attRes").innerHTML = "";
+        this.el("res").innerHTML = "";
       }
     };
     reader.readAsArrayBuffer(file);
@@ -721,7 +746,7 @@ const Att = {
 
   // The "דו"ח נוכחות" PDF is read on the server (pdftotext keeps its columns).
   async loadPdf(file) {
-    const msg = document.getElementById("attMsg");
+    const msg = this.el("msg");
     try {
       const fd = new FormData();
       fd.append("file", file);
@@ -738,7 +763,7 @@ const Att = {
       this.render();
     } catch (err) {
       msg.className = "att-msg err"; msg.textContent = "שגיאה בקריאת הקובץ: " + (err.message || err);
-      document.getElementById("attRes").innerHTML = "";
+      this.el("res").innerHTML = "";
     }
   },
 
@@ -828,14 +853,14 @@ const Att = {
   },
 
   render() {
-    const el = document.getElementById("attRes");
+    const el = this.el("res");
     const bad = this.rows.filter(r => r.p.length);
     const count = k => this.rows.filter(r => r.p.includes(k)).length;
     const shown = this.filter === "all" ? this.rows
       : this.filter === "bad" ? bad : this.rows.filter(r => r.p.includes(this.filter));
     const people = new Set(this.rows.map(r => r.name).filter(Boolean)).size;
     const hasBranch = this.rows.some(r => r.branch);
-    document.getElementById("attInfo").textContent =
+    this.el("info").textContent =
       `${this.fileName} · ${this.rows.length} משמרות · ${people} עובדים`;
     const btn = (k, label, n) => `<button class="fbtn ${this.filter === k ? "active" : ""}" data-f="${k}">${label} (${n})</button>`;
     el.innerHTML = `
