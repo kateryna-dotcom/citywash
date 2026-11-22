@@ -223,12 +223,14 @@ const SHEET_COLS = [
   { k: "bonus", src: 15, label: "בונוס", w: 52, num: true },
   { k: "total", src: 16, label: 'סה"כ', w: 64, num: true },
   { k: "advance", src: 17, label: "מפרעה", w: 56, num: true },
+  // Column U of her workbook: loans from the company and their instalments.
+  { k: "loan", src: 20, label: "הלוואה מהחברה", w: 220 },
   { k: "notes", src: 18, label: "הערות", w: 260 },
 ];
 // `src` is the column's position in her workbook; its 200% column (10) was
 // dropped at her request (2026-11-22) and is skipped on import.
 // Columns carried over when starting a month from the previous one.
-const KEEP_ON_COPY = ["name", "num", "id", "start", "pension", "rate", "price", "notes"];
+const KEEP_ON_COPY = ["name", "num", "id", "start", "pension", "rate", "price", "notes", "loan"];
 const HE_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
 
 const Sheet = {
@@ -452,7 +454,9 @@ const Sheet = {
       SHEET_COLS.forEach(c => {
         const idx = c.src;
         if (c.k === "notes") {
-          const notes = r.slice(idx).map(v => this.fmtCell(v)).filter(Boolean);
+          const taken = new Set(SHEET_COLS.map(x => x.src));
+          const notes = r.slice(idx).filter((v, j) => j === 0 || !taken.has(idx + j))
+            .map(v => this.fmtCell(v)).filter(Boolean);
           if (notes.length) row.notes = notes.join(" | ");
         } else {
           const v = this.fmtCell(r[idx]);
