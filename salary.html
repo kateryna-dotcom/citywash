@@ -28,7 +28,12 @@
 
   /* Inside a company */
   .panel { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }
-  .panel-title { font-size: 16px; font-weight: 700; color: var(--blue-dark); margin-bottom: 12px; }
+  .panel-title { font-size: 16px; font-weight: 700; color: var(--blue-dark); margin-bottom: 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .back-btn {
+    background: #fff; border: 1px solid var(--border); color: var(--blue-dark); border-radius: 8px;
+    padding: 4px 10px; font-size: 13px; font-family: inherit; font-weight: 600; cursor: pointer;
+  }
+  .back-btn:hover { background: var(--blue-light); }
   .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
   .tab {
     background: none; border: none; border-bottom: 3px solid transparent; padding: 9px 18px;
@@ -127,12 +132,12 @@ function renderContent() {
   const c = COMPANIES.find(x => x.id === current.company);
   if (!c) { el.innerHTML = '<div class="empty-hint">בחרי חברה</div>'; return; }
   if (!c.tabs) {
-    el.innerHTML = `<div class="panel"><div class="panel-title">${escapeHtml(c.name)}</div>${placeholder("💰", "כאן יופיע הטיפול בשכר של החברה.")}</div>`;
+    el.innerHTML = `<div class="panel"><div class="panel-title"><button class="back-btn" onclick="selectCompany(null)">→ חזרה</button>${escapeHtml(c.name)}</div>${placeholder("💰", "כאן יופיע הטיפול בשכר של החברה.")}</div>`;
     return;
   }
   const tab = TABS.find(t => t.id === current.tab) || TABS[0];
   el.innerHTML = `<div class="panel">
-    <div class="panel-title">${escapeHtml(c.name)}</div>
+    <div class="panel-title"><button class="back-btn" onclick="selectCompany(null)">→ חזרה</button>${escapeHtml(c.name)}</div>
     <div class="tabs">${TABS.map(t => `<button class="tab ${t.id === tab.id ? "active" : ""}" data-tab="${t.id}">${t.icon} ${t.label}</button>`).join("")}</div>
     <div id="tabBody">${placeholder(tab.icon, tab.text)}</div>
   </div>`;
