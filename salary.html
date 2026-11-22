@@ -142,7 +142,7 @@
       <b>⏱ שעות עובדים (Cash On Tab)</b>
       <span class="hint" id="attInfo">העלי את קובץ השעות שהורדת מ-Cash On Tab לבדיקת טעויות</span>
       <button class="sbtn" onclick="document.getElementById('attFile').click()">📤 העלאת קובץ שעות</button>
-      <input type="file" id="attFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="Att.load(this.files[0]); this.value=''">
+      <input type="file" id="attFile" accept=".pdf,.xlsx,.xls,.csv" style="display:none" onchange="Att.load(this.files[0]); this.value=''">
       <span class="att-msg" id="attMsg"></span>
     </div>
     <div class="att-res" id="attRes"></div>
@@ -596,6 +596,7 @@ const Att = {
     if (!file) return;
     const msg = document.getElementById("attMsg");
     msg.className = "att-msg"; msg.textContent = "קורא...";
+    if (/\.pdf$/i.test(file.name) || file.type === "application/pdf") { this.loadPdf(file); return; }
     const reader = new FileReader();
     reader.onload = e => {
       try {
@@ -612,6 +613,42 @@ const Att = {
       }
     };
     reader.readAsArrayBuffer(file);
+  },
+
+  // The "דו"ח נוכחות" PDF is read on the server (pdftotext keeps its columns).
+  async loadPdf(file) {
+    const msg = document.getElementById("attMsg");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/salary/attendance", { method: "POST", body: fd });
+      if (!res.ok) throw new Error(await res.text());
+      const j = await res.json();
+      const rows = (j.rows || []).map(r => this.check({
+        name: r.name, date: r.date, branch: r.branch,
+        tin: this.minutes(r.in), tout: this.minutes(r.out),
+      }));
+      if (!rows.length) throw new Error("לא נמצאו משמרות בקובץ");
+      this.rows = rows; this.fileName = file.name; this.filter = "bad";
+      msg.textContent = "";
+      this.render();
+    } catch (err) {
+      msg.className = "att-msg err"; msg.textContent = "שגיאה בקריאת הקובץ: " + (err.message || err);
+      document.getElementById("attRes").innerHTML = "";
+    }
+  },
+
+  check(r) {
+    const p = [];
+    if (r.tin == null) p.push("noIn");
+    if (r.tout == null) p.push("noOut");
+    if (r.tin != null && r.tin < ATT_EARLIEST) p.push("early");
+    let dur = null;
+    if (r.tin != null && r.tout != null) {
+      dur = r.tout - r.tin; if (dur < 0) dur += 1440;
+      if (dur < ATT_MIN_MINUTES) p.push("short");
+    }
+    return { ...r, dur, p };
   },
 
   text(v) { return v == null ? "" : String(v).trim(); },
@@ -681,16 +718,7 @@ const Att = {
       const date = cols.date >= 0 ? this.dateText(r[cols.date]) : this.dateText(vin) || this.dateText(vout);
       const tin = this.minutes(vin), tout = this.minutes(vout);
       if (!name && !date && tin == null && tout == null) continue;
-      const p = [];
-      if (tin == null) p.push("noIn");
-      if (tout == null) p.push("noOut");
-      if (tin != null && tin < ATT_EARLIEST) p.push("early");
-      let dur = null;
-      if (tin != null && tout != null) {
-        dur = tout - tin; if (dur < 0) dur += 1440;
-        if (dur < ATT_MIN_MINUTES) p.push("short");
-      }
-      out.push({ name, date, branch: cols.branch >= 0 ? this.text(r[cols.branch]) : "", tin, tout, dur, p });
+      out.push(this.check({ name, date, branch: cols.branch >= 0 ? this.text(r[cols.branch]) : "", tin, tout }));
     }
     return out;
   },

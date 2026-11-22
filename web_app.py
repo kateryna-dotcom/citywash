@@ -46,6 +46,7 @@ import branches
 import companies
 import invoice_store
 import salary_store
+import attendance_parser
 import invoice_ingest
 import suppliers
 import item_matcher
@@ -1090,6 +1091,25 @@ async def salary_sheet_save(request: Request):
     except Exception as e:  # noqa: BLE001
         return Response(f"Error saving sheet: {e}", status_code=500)
     return {"status": "saved"}
+
+
+@app.post("/api/salary/attendance")
+async def salary_attendance(request: Request, file: UploadFile = File(...)):
+    """Cash On Tab attendance report (PDF) -> shifts, for the hours check
+    on the שכר page. Nothing is stored."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    data = await file.read()
+    if not data.startswith(b"%PDF"):
+        return Response("not a PDF file", status_code=400)
+    if len(data) > 20_000_000:
+        return Response("file too large", status_code=413)
+    try:
+        rows = attendance_parser.parse_pdf(data)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error reading PDF: {e}", status_code=500)
+    return {"rows": rows}
 
 
 @app.get("/api/credits/list")
