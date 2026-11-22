@@ -1106,10 +1106,10 @@ async def salary_attendance(request: Request, file: UploadFile = File(...)):
     if len(data) > 20_000_000:
         return Response("file too large", status_code=413)
     try:
-        rows = attendance_parser.parse_pdf(data)
+        parsed = attendance_parser.parse_pdf(data)
     except Exception as e:  # noqa: BLE001
         return Response(f"Error reading PDF: {e}", status_code=500)
-    return {"rows": rows}
+    return parsed
 
 
 @app.get("/api/credits/list")
