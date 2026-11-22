@@ -68,6 +68,9 @@
   table.sheet input:focus { outline: 2px solid var(--blue); background: #fff; }
   table.sheet td.num input { text-align: center; direction: ltr; font-variant-numeric: tabular-nums; }
   table.sheet tr:hover td { background: #fafcfe; }
+  table.sheet tr.branch-row td { background: #f3f7fb; font-weight: 700; color: var(--blue-dark); padding: 8px 10px; border-top: 2px solid var(--border); }
+  table.sheet tr.branch-row:hover td { background: #f3f7fb; }
+  .sbtn.small { padding: 2px 9px; font-size: 12px; margin-inline-start: 10px; }
   .del-row { background: none; border: none; color: #a7b6c4; cursor: pointer; font-size: 16px; padding: 4px 8px; }
   .del-row:hover { color: #c0392b; }
   .sheet-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; flex-wrap: wrap; gap: 8px; font-size: 13px; color: var(--muted); }
@@ -143,7 +146,7 @@ const TABS = [
   { id: "payslip", label: "טיפול תלוש",   icon: "🧾", text: "כאן יופיע הטיפול בתלושי השכר של החברה." },
 ];
 
-let current = { company: null, tab: "hr", branch: null };
+let current = { company: null, tab: "hr" };
 
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -203,32 +206,33 @@ try { Object.assign(current, JSON.parse(localStorage.getItem("salary.view") || "
 // cell is editable; changes auto-save to /api/salary/sheet. Import reads her
 // workbook (a month's sheet), export writes the same layout back out.
 const SHEET_COLS = [
-  { k: "name", label: "שם העובד", w: 150 },
-  { k: "num", label: "מספר עובד", w: 58, num: true },
-  { k: "id", label: "ת.ז", w: 92, num: true },
-  { k: "start", label: "תחילת עבודה", w: 88, num: true },
-  { k: "pension", label: "פנסיה", w: 66 },
-  { k: "rate", label: "שעתי", w: 86 },
-  { k: "price", label: "מחיר לשעה", w: 62, num: true },
-  { k: "h100", label: "100%", x: 1, w: 58, num: true },
-  { k: "h125", label: "125%", x: 1.25, w: 52, num: true },
-  { k: "h150", label: "150%", x: 1.5, w: 52, num: true },
-  { k: "h200", label: "200%", x: 2, w: 52, num: true },
-  { k: "days", label: "ימי עבודה", w: 50, num: true },
-  { k: "holidays", label: "ימי חג", w: 46, num: true },
-  { k: "vacation", label: "חופשה", w: 46, num: true },
-  { k: "travel", label: "נסיעות", w: 56, num: true },
-  { k: "bonus", label: "בונוס", w: 52, num: true },
-  { k: "total", label: 'סה"כ', w: 64, num: true },
-  { k: "advance", label: "מפרעה", w: 56, num: true },
-  { k: "notes", label: "הערות", w: 260 },
+  { k: "name", src: 0, label: "שם העובד", w: 150 },
+  { k: "num", src: 1, label: "מספר עובד", w: 58, num: true },
+  { k: "id", src: 2, label: "ת.ז", w: 92, num: true },
+  { k: "start", src: 3, label: "תחילת עבודה", w: 88, num: true },
+  { k: "pension", src: 4, label: "פנסיה", w: 66 },
+  { k: "rate", src: 5, label: "שעתי", w: 86 },
+  { k: "price", src: 6, label: "מחיר לשעה", w: 62, num: true },
+  { k: "h100", src: 7, label: "100%", x: 1, w: 58, num: true },
+  { k: "h125", src: 8, label: "125%", x: 1.25, w: 52, num: true },
+  { k: "h150", src: 9, label: "150%", x: 1.5, w: 52, num: true },
+  { k: "days", src: 11, label: "ימי עבודה", w: 50, num: true },
+  { k: "holidays", src: 12, label: "ימי חג", w: 46, num: true },
+  { k: "vacation", src: 13, label: "חופשה", w: 46, num: true },
+  { k: "travel", src: 14, label: "נסיעות", w: 56, num: true },
+  { k: "bonus", src: 15, label: "בונוס", w: 52, num: true },
+  { k: "total", src: 16, label: 'סה"כ', w: 64, num: true },
+  { k: "advance", src: 17, label: "מפרעה", w: 56, num: true },
+  { k: "notes", src: 18, label: "הערות", w: 260 },
 ];
+// `src` is the column's position in her workbook; its 200% column (10) was
+// dropped at her request (2026-11-22) and is skipped on import.
 // Columns carried over when starting a month from the previous one.
 const KEEP_ON_COPY = ["name", "num", "id", "start", "pension", "rate", "price", "notes"];
 const HE_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
 
 const Sheet = {
-  company: null, month: null, data: null, branch: null, months: [], timer: null,
+  company: null, month: null, data: null, template: null, months: [], timer: null,
 
   async open(c) {
     this.company = c;
@@ -237,7 +241,6 @@ const Sheet = {
       this.month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
       try { this.month = localStorage.getItem("salary.sheetMonth") || this.month; } catch (e) {}
     }
-    this.branch = c.branches.some(b => b.key === current.branch) ? current.branch : c.branches[0].key;
     await this.load();
   },
 
@@ -255,8 +258,9 @@ const Sheet = {
       const res = await fetch(`/api/salary/sheet?company=${this.company.id}&month=${this.month}`);
       if (!res.ok) throw new Error(await res.text());
       const j = await res.json();
-      this.data = j.data || this.emptyData();
       this.months = j.months || [];
+      this.template = null;
+      this.data = j.data || await this.templateFromPrev();
     } catch (e) {
       this.data = this.emptyData();
       this.loadError = String(e.message || e);
@@ -265,35 +269,67 @@ const Sheet = {
     this.render();
   },
 
+  // A month with nothing saved starts from the latest earlier saved month:
+  // same employees and notes, no hours. Saved on the first edit.
+  async templateFromPrev() {
+    const prev = this.months.filter(m => m < this.month).pop();
+    if (!prev) return this.emptyData();
+    const res = await fetch(`/api/salary/sheet?company=${this.company.id}&month=${prev}`);
+    const j = res.ok ? await res.json() : {};
+    if (!j.data) return this.emptyData();
+    this.template = prev;
+    return this.keepColumns(j.data);
+  },
+  keepColumns(data) {
+    const out = this.emptyData();
+    Object.entries(data.branches || {}).forEach(([k, rows]) => {
+      out.branches[k] = rows.map(r => Object.fromEntries(KEEP_ON_COPY.filter(f => r[f] != null).map(f => [f, r[f]])));
+    });
+    return out;
+  },
+  branchKeys() {
+    return [...this.company.branches.map(b => b.key),
+            ...Object.keys(this.data.branches).filter(k => !this.company.branches.some(b => b.key === k))];
+  },
+  branchLabel(k) { const b = this.company.branches.find(x => x.key === k); return b ? b.label : k; },
+
   monthName(m) { const [y, mo] = m.split("-").map(Number); return `${HE_MONTHS[mo - 1]} ${y}`; },
 
   render() {
     const root = document.getElementById("sheetRoot");
     if (!root) return;
-    const rows = this.data.branches[this.branch] || [];
     const saved = this.months.includes(this.month);
+    const total = Object.values(this.data.branches).reduce((n, r) => n + r.length, 0);
+    const ncol = SHEET_COLS.length + 1;
+    const state = this.loadError ? "שגיאה בטעינה: " + escapeHtml(this.loadError)
+      : saved ? "שמור ✓"
+      : this.template ? `תבנית מ${escapeHtml(this.monthName(this.template))} — יישמר בעריכה הראשונה`
+      : "חודש חדש — עדיין ריק";
+    const body = this.branchKeys().map(k => {
+      const rows = this.data.branches[k] || [];
+      return `<tr class="branch-row"><td colspan="${ncol}">📍 ${escapeHtml(this.branchLabel(k))} (${rows.length})
+          <button class="sbtn small" data-add="${escapeHtml(k)}">+ הוסף עובד</button></td></tr>
+        ${rows.map((r, i) => `<tr>${SHEET_COLS.map(c =>
+            `<td class="${c.num ? "num" : ""}"><input data-b="${escapeHtml(k)}" data-row="${i}" data-k="${c.k}" value="${escapeHtml(r[c.k] ?? "")}"></td>`).join("")}
+            <td><button class="del-row" data-b="${escapeHtml(k)}" data-del="${i}" title="מחיקת שורה">✕</button></td></tr>`).join("")
+          || `<tr><td colspan="${ncol}" style="padding:10px;text-align:center;color:var(--muted)">אין עובדים בסניף הזה</td></tr>`}`;
+    }).join("");
     root.innerHTML = `
       <div class="sheet-bar">
         <label>חודש: <input type="month" id="sheetMonth" value="${this.month}"></label>
         <button class="sbtn" id="btnImport">⬆ ייבוא מאקסל</button>
         <button class="sbtn" id="btnCopyPrev">העתק עובדים מחודש קודם</button>
         <button class="sbtn primary" id="btnExport">⬇ הורדת אקסל</button>
-        <span class="save-state ${this.loadError ? "err" : ""}" id="saveState">${this.loadError ? "שגיאה בטעינה: " + escapeHtml(this.loadError) : (saved ? "שמור ✓" : "חודש חדש — עדיין ריק")}</span>
+        <span class="save-state ${this.loadError ? "err" : ""}" id="saveState">${state}</span>
         <input type="file" id="importFile" accept=".xlsx,.xls" style="display:none">
       </div>
       <div id="pickSheet"></div>
-      <div class="tabs">${this.company.branches.map(b =>
-        `<button class="tab ${b.key === this.branch ? "active" : ""}" data-branch="${escapeHtml(b.key)}">📍 ${escapeHtml(b.label)} (${(this.data.branches[b.key] || []).length})</button>`).join("")}</div>
       <div class="sheet-wrap"><table class="sheet">
         <thead><tr>${SHEET_COLS.map(c => `<th style="min-width:${c.w}px">${c.label}</th>`).join("")}<th></th></tr></thead>
-        <tbody>${rows.map((r, i) => `<tr>${SHEET_COLS.map(c =>
-            `<td class="${c.num ? "num" : ""}"><input data-row="${i}" data-k="${c.k}" value="${escapeHtml(r[c.k] ?? "")}"></td>`).join("")}
-            <td><button class="del-row" data-del="${i}" title="מחיקת שורה">✕</button></td></tr>`).join("")
-          || `<tr><td colspan="${SHEET_COLS.length + 1}" style="padding:18px;text-align:center;color:var(--muted)">אין עובדים בסניף הזה בחודש ${escapeHtml(this.monthName(this.month))}</td></tr>`}</tbody>
+        <tbody>${body}</tbody>
       </table></div>
       <div class="sheet-foot">
-        <button class="sbtn" id="btnAddRow">+ הוסף עובד</button>
-        <span>${rows.length} עובדים · ${escapeHtml(this.monthName(this.month))}</span>
+        <span>${total} עובדים · ${escapeHtml(this.monthName(this.month))}</span>
       </div>`;
     root.querySelector("#sheetMonth").addEventListener("change", e => {
       if (!e.target.value) return;
@@ -301,25 +337,23 @@ const Sheet = {
       try { localStorage.setItem("salary.sheetMonth", this.month); } catch (err) {}
       this.load();
     });
-    root.querySelectorAll("[data-branch]").forEach(b => b.addEventListener("click", () => {
-      this.branch = b.dataset.branch; current.branch = this.branch; save(); this.render();
-    }));
     root.querySelectorAll("input[data-k]").forEach(inp => inp.addEventListener("input", () => {
-      this.data.branches[this.branch][Number(inp.dataset.row)][inp.dataset.k] = inp.value;
+      this.data.branches[inp.dataset.b][Number(inp.dataset.row)][inp.dataset.k] = inp.value;
       this.scheduleSave();
     }));
     root.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () => {
-      const r = this.data.branches[this.branch][Number(b.dataset.del)];
+      const r = this.data.branches[b.dataset.b][Number(b.dataset.del)];
       if (!confirm(`למחוק את השורה${r && r.name ? " של " + r.name : ""}?`)) return;
-      this.data.branches[this.branch].splice(Number(b.dataset.del), 1);
+      this.data.branches[b.dataset.b].splice(Number(b.dataset.del), 1);
       this.saveNow(); this.render();
     }));
-    root.querySelector("#btnAddRow").addEventListener("click", () => {
-      this.data.branches[this.branch].push({});
+    root.querySelectorAll("[data-add]").forEach(b => b.addEventListener("click", () => {
+      const k = b.dataset.add;
+      (this.data.branches[k] = this.data.branches[k] || []).push({});
       this.saveNow(); this.render();
-      const inputs = root.querySelectorAll('input[data-k="name"]');
+      const inputs = root.querySelectorAll(`input[data-k="name"][data-b="${CSS.escape(k)}"]`);
       if (inputs.length) inputs[inputs.length - 1].focus();
-    });
+    }));
     root.querySelector("#btnExport").addEventListener("click", () => this.exportXlsx());
     root.querySelector("#btnCopyPrev").addEventListener("click", () => this.copyPrev());
     const file = root.querySelector("#importFile");
@@ -361,11 +395,7 @@ const Sheet = {
     const j = res.ok ? await res.json() : {};
     if (!j.data) { alert(`אין נתונים שמורים ל${this.monthName(prev)}`); return; }
     if (this.hasData() && !confirm(`בחודש ${this.monthName(this.month)} כבר יש נתונים. להחליף ברשימת העובדים מ${this.monthName(prev)} (בלי שעות)?`)) return;
-    const out = this.emptyData();
-    Object.entries(j.data.branches || {}).forEach(([k, rows]) => {
-      out.branches[k] = rows.map(r => Object.fromEntries(KEEP_ON_COPY.filter(f => r[f] != null).map(f => [f, r[f]])));
-    });
-    this.data = out; this.saveNow(); this.render();
+    this.data = this.keepColumns(j.data); this.template = null; this.saveNow(); this.render();
   },
 
   // ---- Excel import: one month's sheet of her workbook -----------------
@@ -419,7 +449,8 @@ const Sheet = {
       if (first && this.fmtCell(next[0]) === "שם העובד") { branch = this.branchKey(first, out); continue; }
       if (first === "שם העובד" || !branch || !first) continue;
       const row = {};
-      SHEET_COLS.forEach((c, idx) => {
+      SHEET_COLS.forEach(c => {
+        const idx = c.src;
         if (c.k === "notes") {
           const notes = r.slice(idx).map(v => this.fmtCell(v)).filter(Boolean);
           if (notes.length) row.notes = notes.join(" | ");
@@ -449,9 +480,7 @@ const Sheet = {
       return v;
     };
     const aoa = [];
-    const keys = [...this.company.branches.map(b => b.key),
-                  ...Object.keys(this.data.branches).filter(k => !this.company.branches.some(b => b.key === k))];
-    keys.forEach(k => {
+    this.branchKeys().forEach(k => {
       aoa.push([k]);
       aoa.push(SHEET_COLS.map(c => c.x ?? c.label));
       (this.data.branches[k] || []).forEach(r => aoa.push(SHEET_COLS.map(c => toCell(c, r[c.k]))));

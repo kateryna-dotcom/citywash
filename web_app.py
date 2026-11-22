@@ -161,6 +161,10 @@ def _startup():
 
     try:
         salary_store.init_db()
+        # Kateryna's October sheet as the starting template (only if empty).
+        import salary_seed
+        if salary_store.seed_sheet("rami", "2026-10", salary_seed.RAMI_OCTOBER_2026):
+            print("[startup] seeded רמי מרדכיב October 2026 salary sheet")
     except Exception as e:  # noqa: BLE001
         print(f"[startup] salary_store.init_db() skipped: {e}")
 
