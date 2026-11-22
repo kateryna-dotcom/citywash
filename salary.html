@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>שכר</title>
+<style>
+  :root {
+    --blue-dark: #0b4f8a; --blue: #1e6fb8; --blue-light: #eaf3fb;
+    --border: #d9e6f0; --text: #1c2b39; --muted: #5b7186;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", Tahoma, Arial, sans-serif;
+    background: #f4f8fb; color: var(--text); padding: 22px;
+  }
+  h2 { margin: 0 0 14px; color: var(--blue-dark); font-size: 19px; }
+
+  /* Company buttons */
+  .companies { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .company-btn {
+    background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 14px 12px;
+    font-family: inherit; font-size: 14.5px; font-weight: 600; color: var(--blue-dark);
+    cursor: pointer; text-align: center; line-height: 1.35;
+  }
+  .company-btn:hover { border-color: var(--blue); background: var(--blue-light); }
+  .company-btn.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+
+  /* Inside a company */
+  .panel { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }
+  .panel-title { font-size: 16px; font-weight: 700; color: var(--blue-dark); margin-bottom: 12px; }
+  .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+  .tab {
+    background: none; border: none; border-bottom: 3px solid transparent; padding: 9px 18px;
+    font-family: inherit; font-size: 14.5px; font-weight: 600; color: var(--muted); cursor: pointer;
+  }
+  .tab.active { color: var(--blue-dark); border-bottom-color: var(--blue); }
+  .placeholder { text-align: center; color: var(--muted); padding: 40px 16px; }
+  .placeholder .icon { font-size: 34px; margin-bottom: 8px; }
+  .placeholder .soon {
+    display: inline-block; background: var(--blue-light); color: var(--blue-dark); padding: 3px 12px;
+    border-radius: 20px; font-size: 12.5px; font-weight: 600; margin: 8px 0;
+  }
+  .empty-hint { text-align: center; color: var(--muted); padding: 50px 16px; }
+
+  @media (max-width: 600px) {
+    body { padding: 12px; }
+    .companies { grid-template-columns: 1fr 1fr; }
+    .tab { padding: 9px 10px; }
+  }
+</style>
+</head>
+<body>
+  <h2>💰 שכר</h2>
+
+  <div class="companies" id="companies"></div>
+  <div id="content"><div class="empty-hint">בחרי חברה</div></div>
+
+<script>
+// The five companies Kateryna handles payroll for (2026-11-22). Three of
+// them are split into טיפול כוח אדם / טיפול תלוש; the other two get one
+// section for now.
+const COMPANIES = [
+  { id: "abt",  name: 'א.ב.ת. שירותי שטיפה בע"מ',     tabs: true },
+  { id: "ubr",  name: 'יו.בי.אר שטיפת רכב בע"מ',      tabs: true },
+  { id: "bui",  name: "בי. יו .אי. שטיפת רכבים",       tabs: true },
+  { id: "aa",   name: 'א.א. רכב ורכש בע"מ',            tabs: false },
+  { id: "rami", name: 'רמי מרדכיב שירותי שטיפה בע"מ',  tabs: false },
+];
+const TABS = [
+  { id: "hr",      label: "טיפול כוח אדם", icon: "👥", text: "כאן יופיע הטיפול בכוח האדם של החברה." },
+  { id: "payslip", label: "טיפול תלוש",   icon: "🧾", text: "כאן יופיע הטיפול בתלושי השכר של החברה." },
+];
+
+let current = { company: null, tab: "hr" };
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function renderCompanies() {
+  const el = document.getElementById("companies");
+  el.innerHTML = COMPANIES.map(c =>
+    `<button class="company-btn ${current.company === c.id ? "active" : ""}" data-id="${c.id}">${escapeHtml(c.name)}</button>`
+  ).join("");
+  el.querySelectorAll(".company-btn").forEach(b => b.addEventListener("click", () => selectCompany(b.dataset.id)));
+}
+
+function placeholder(icon, text) {
+  return `<div class="placeholder"><div class="icon">${icon}</div><span class="soon">בקרוב</span><div>${escapeHtml(text)}</div></div>`;
+}
+
+function renderContent() {
+  const el = document.getElementById("content");
+  const c = COMPANIES.find(x => x.id === current.company);
+  if (!c) { el.innerHTML = '<div class="empty-hint">בחרי חברה</div>'; return; }
+  if (!c.tabs) {
+    el.innerHTML = `<div class="panel"><div class="panel-title">${escapeHtml(c.name)}</div>${placeholder("💰", "כאן יופיע הטיפול בשכר של החברה.")}</div>`;
+    return;
+  }
+  const tab = TABS.find(t => t.id === current.tab) || TABS[0];
+  el.innerHTML = `<div class="panel">
+    <div class="panel-title">${escapeHtml(c.name)}</div>
+    <div class="tabs">${TABS.map(t => `<button class="tab ${t.id === tab.id ? "active" : ""}" data-tab="${t.id}">${t.icon} ${t.label}</button>`).join("")}</div>
+    <div id="tabBody">${placeholder(tab.icon, tab.text)}</div>
+  </div>`;
+  el.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => { current.tab = b.dataset.tab; save(); renderContent(); }));
+}
+
+function selectCompany(id) {
+  current.company = id;
+  save();
+  renderCompanies();
+  renderContent();
+}
+
+// Remember the last company/tab for this viewer only.
+function save() { try { localStorage.setItem("salary.view", JSON.stringify(current)); } catch (e) {} }
+try { Object.assign(current, JSON.parse(localStorage.getItem("salary.view") || "{}")); } catch (e) {}
+
+renderCompanies();
+renderContent();
+</script>
+</body>
+</html>
