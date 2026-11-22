@@ -70,6 +70,8 @@
   table.sheet tr:hover td { background: #fafcfe; }
   table.sheet tr.branch-row td { background: #f3f7fb; font-weight: 700; color: var(--blue-dark); padding: 8px 10px; border-top: 2px solid var(--border); }
   table.sheet tr.branch-row:hover td { background: #f3f7fb; }
+  table.sheet tr.branch-end td { padding: 6px 10px; text-align: right; border-bottom: none; }
+  table.sheet tr.branch-end:hover td { background: transparent; }
   .sbtn.small { padding: 2px 9px; font-size: 12px; margin-inline-start: 10px; }
   .del-row { background: none; border: none; color: #a7b6c4; cursor: pointer; font-size: 16px; padding: 4px 8px; }
   .del-row:hover { color: #c0392b; }
@@ -259,6 +261,8 @@ const SHEET_COLS = [
 ];
 // `src` is the column's position in her workbook; its 200% column (10) was
 // dropped at her request (2026-11-22) and is skipped on import.
+// What "ניקוי שעות" empties (the same columns the PDF import fills).
+const HOUR_COLS = ["h100", "h125", "h150", "days"];
 // Columns carried over when starting a month from the previous one.
 const KEEP_ON_COPY = ["name", "num", "id", "start", "pension", "rate", "price", "notes", "loan", "pensionAuto"];
 const HE_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
@@ -384,7 +388,9 @@ const Sheet = {
         ${rows.map((r, i) => `<tr>${SHEET_COLS.map(c =>
             `<td class="${c.num ? "num" : ""}"><input data-b="${escapeHtml(k)}" data-row="${i}" data-k="${c.k}" value="${escapeHtml(r[c.k] ?? "")}"></td>`).join("")}
             <td><button class="del-row" data-b="${escapeHtml(k)}" data-del="${i}" title="מחיקת שורה">✕</button></td></tr>`).join("")
-          || `<tr><td colspan="${ncol}" style="padding:10px;text-align:center;color:var(--muted)">אין עובדים בסניף הזה</td></tr>`}`;
+          || `<tr><td colspan="${ncol}" style="padding:10px;text-align:center;color:var(--muted)">אין עובדים בסניף הזה</td></tr>`}
+        ${rows.length ? `<tr class="branch-end"><td colspan="${ncol}">
+          <button class="sbtn small" style="margin:0" data-clear="${escapeHtml(k)}">🧹 ניקוי שעות — ${escapeHtml(this.branchLabel(k))}</button></td></tr>` : ""}`;
     }).join("");
     root.innerHTML = `
       <div class="sheet-bar">
@@ -432,6 +438,14 @@ const Sheet = {
       const r = this.data.branches[b.dataset.b][Number(b.dataset.del)];
       if (!confirm(`למחוק את השורה${r && r.name ? " של " + r.name : ""}?`)) return;
       this.data.branches[b.dataset.b].splice(Number(b.dataset.del), 1);
+      this.saveNow(); this.render();
+    }));
+    // Clear one branch's hours (100/125/150%) and work days, e.g. before
+    // importing the month again. Everything else in the rows stays.
+    root.querySelectorAll("[data-clear]").forEach(b => b.addEventListener("click", () => {
+      const k = b.dataset.clear;
+      if (!confirm(`לנקות שעות 100% / 125% / 150% וימי עבודה של כל העובדים ב${this.branchLabel(k)}?`)) return;
+      (this.data.branches[k] || []).forEach(r => { HOUR_COLS.forEach(c => { delete r[c]; }); });
       this.saveNow(); this.render();
     }));
     root.querySelectorAll("[data-add]").forEach(b => b.addEventListener("click", () => {
