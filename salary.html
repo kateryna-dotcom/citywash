@@ -389,11 +389,11 @@ const Sheet = {
     root.innerHTML = `
       <div class="sheet-bar">
         <label>חודש: <input type="month" id="sheetMonth" value="${this.month}"></label>
-        <button class="sbtn" id="btnImport">⬆ ייבוא מאקסל</button>
+        <button class="sbtn" id="btnImport">⬆ ייבוא שעות (PDF / אקסל)</button>
         <button class="sbtn" id="btnCopyPrev">העתק עובדים מחודש קודם</button>
         <button class="sbtn primary" id="btnExport">⬇ הורדת אקסל</button>
         <span class="save-state ${this.loadError ? "err" : ""}" id="saveState">${state}</span>
-        <input type="file" id="importFile" accept=".xlsx,.xls" style="display:none">
+        <input type="file" id="importFile" accept=".pdf,.xlsx,.xls" style="display:none">
       </div>
       <div id="pickSheet"></div>
       <div class="sheet-wrap"><table class="sheet">
@@ -479,6 +479,11 @@ const Sheet = {
 
   // ---- Excel import: one month's sheet of her workbook -----------------
   importXlsx(file) {
+    if (/\.pdf$/i.test(file.name) || file.type === "application/pdf") {
+      document.getElementById("importFile").value = "";
+      this.importPdf(file);
+      return;
+    }
     const reader = new FileReader();
     reader.onload = e => {
       let wb;
@@ -503,6 +508,105 @@ const Sheet = {
     };
     reader.readAsArrayBuffer(file);
     document.getElementById("importFile").value = "";
+  },
+
+  // ---- PDF import: Cash On Tab "דו"ח נוכחות" -> hours of this month ----
+  // Each employee's totals (רגילות -> 100%, רמה 1 -> 125%, רמה 2 -> 150%,
+  // attendance days) go into the matching row. Names are matched loosely
+  // (word order, spelling such as מרדכאייב / מורדכייב); she confirms each
+  // match before anything is written.
+  async importPdf(file) {
+    const pick = document.getElementById("pickSheet");
+    pick.innerHTML = '<div class="pick-sheet">קורא את הקובץ...</div>';
+    let j;
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/salary/attendance", { method: "POST", body: fd });
+      if (!res.ok) throw new Error(await res.text());
+      j = await res.json();
+    } catch (e) {
+      pick.innerHTML = `<div class="pick-sheet" style="color:#c0392b">שגיאה בקריאת הקובץ: ${escapeHtml(e.message || e)}</div>`;
+      return;
+    }
+    const emps = j.employees || [];
+    if (!emps.length) { pick.innerHTML = '<div class="pick-sheet" style="color:#c0392b">לא נמצאו עובדים בקובץ</div>'; return; }
+    // Problem shifts per employee, same checks as the hours check on the main page.
+    const bad = {};
+    (j.rows || []).forEach(r => {
+      const c = Att.check({ tin: Att.minutes(r.in), tout: Att.minutes(r.out) });
+      if (c.p.length) bad[r.name + "|" + r.code] = (bad[r.name + "|" + r.code] || 0) + 1;
+    });
+    const months = new Set((j.rows || []).map(r => r.date.slice(3, 5) + "/" + r.date.slice(6)));
+    const [y, m] = this.month.split("-");
+    const wrongMonth = months.size && !months.has(`${m}/${y}`);
+
+    const opts = [];
+    this.branchKeys().forEach(k => (this.data.branches[k] || []).forEach((r, i) => {
+      if (r.name) opts.push({ v: `${k}#${i}`, label: `${r.name} (${this.branchLabel(k)})`, name: r.name });
+    }));
+    const used = new Set();
+    const choice = emps.map(e => {
+      let best = null, bestScore = 0;
+      opts.forEach(o => { const sc = nameScore(e.name, o.name); if (sc > bestScore) { bestScore = sc; best = o; } });
+      if (best && bestScore >= 0.8 && !used.has(best.v)) { used.add(best.v); return best.v; }
+      const hours = e.h100 + e.h125 + e.h150;
+      return hours > 0 ? "new#" + this.sheetBranch(e.branch) : "skip";
+    });
+    const fmt = v => v ? String(v) : "";
+    pick.innerHTML = `<div class="pick-sheet" style="display:block">
+      <div style="margin-bottom:8px"><b>ייבוא שעות מ-${escapeHtml(file.name)}</b> לחודש ${escapeHtml(this.monthName(this.month))}
+        — בדקי לכל עובד מ-Cash On Tab לאיזו שורה בטבלה הוא שייך:</div>
+      ${wrongMonth ? `<div style="color:#c0392b;margin-bottom:8px">⚠ הקובץ הוא של חודש ${escapeHtml([...months].join(", "))} — בטוח שזה החודש הנכון?</div>` : ""}
+      <div class="sheet-wrap"><table class="att-t">
+        <thead><tr><th>עובד ב-Cash On Tab</th><th>100%</th><th>125%</th><th>150%</th><th>ימים</th><th>טעויות</th><th>שורה בטבלה</th></tr></thead>
+        <tbody>${emps.map((e, i) => `<tr>
+          <td>${escapeHtml(e.name)} <span style="color:var(--muted);font-size:11.5px">${escapeHtml(e.code)}</span></td>
+          <td class="t">${fmt(e.h100)}</td><td class="t">${fmt(e.h125)}</td><td class="t">${fmt(e.h150)}</td><td class="t">${e.days}</td>
+          <td>${bad[e.name + "|" + e.code] ? `<span class="chip">⚠ ${bad[e.name + "|" + e.code]}</span>` : ""}</td>
+          <td><select data-emp="${i}">
+            <option value="skip" ${choice[i] === "skip" ? "selected" : ""}>— לא לייבא —</option>
+            ${opts.map(o => `<option value="${escapeHtml(o.v)}" ${choice[i] === o.v ? "selected" : ""}>${escapeHtml(o.label)}</option>`).join("")}
+            ${this.branchKeys().map(k => `<option value="new#${escapeHtml(k)}" ${choice[i] === "new#" + k ? "selected" : ""}>+ עובד חדש ב${escapeHtml(this.branchLabel(k))}</option>`).join("")}
+          </select></td></tr>`).join("")}</tbody>
+      </table></div>
+      ${Object.keys(bad).length ? '<div style="font-size:12.5px;color:var(--muted);margin-top:6px">⚠ = משמרות עם טעות (חסרה כניסה/יציאה, לפני 07:15, פחות משעתיים) — פירוט ב"שעות עובדים" בדף הראשי של שכר.</div>' : ""}
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button class="sbtn primary" id="doPdfImport">ייבא שעות</button><button class="sbtn" id="cancelImport">ביטול</button>
+      </div></div>`;
+    pick.querySelector("#cancelImport").onclick = () => { pick.innerHTML = ""; };
+    pick.querySelector("#doPdfImport").onclick = () => {
+      const sel = [...pick.querySelectorAll("select[data-emp]")].map(s => s.value);
+      const dup = sel.filter(v => v.includes("#") && !v.startsWith("new#")).find((v, i, a) => a.indexOf(v) !== i);
+      if (dup) { alert("אותה שורה בטבלה נבחרה ליותר מעובד אחד"); return; }
+      let n = 0;
+      sel.forEach((v, i) => {
+        if (v === "skip") return;
+        const e = emps[i];
+        let row;
+        if (v.startsWith("new#")) {
+          const k = v.slice(4);
+          row = { name: e.name };
+          (this.data.branches[k] = this.data.branches[k] || []).push(row);
+        } else {
+          const [k, idx] = [v.slice(0, v.lastIndexOf("#")), Number(v.slice(v.lastIndexOf("#") + 1))];
+          row = this.data.branches[k][idx];
+        }
+        row.h100 = fmt(e.h100); row.h125 = fmt(e.h125); row.h150 = fmt(e.h150); row.days = fmt(e.days);
+        n++;
+      });
+      pick.innerHTML = "";
+      this.template = null;
+      this.fillPension();
+      this.saveNow(); this.render();
+      this.setState(`יובאו שעות ל-${n} עובדים ✓`);
+    };
+  },
+  // Cash On Tab branch name -> this sheet's branch key.
+  sheetBranch(b) {
+    const t = String(b || "");
+    const k = this.company.branches.find(x => t.includes("מפגש") ? x.key.includes("מפגש") : (!x.key.includes("מפגש") && t.includes(x.key)));
+    return k ? k.key : this.company.branches[0].key;
   },
 
   fmtCell(v) {
@@ -768,6 +872,28 @@ const Att = {
     XLSX.writeFile(wb, `טעויות_שעות_${this.fileName.replace(/\.[^.]+$/, "")}.xlsx`);
   },
 };
+
+// Loose match of two employee names: word order ignored, vowel letters
+// (א/ו/י) and final forms dropped, so "ראוף חביבוב" = "חביבוב ראוף" and
+// "ישראל מרדכאייב" = "מורדכייב ישראל". 1 = same, 0 = nothing alike.
+function nameScore(a, b) {
+  const FIN = { "ך": "כ", "ם": "מ", "ן": "נ", "ף": "פ", "ץ": "צ" };
+  const words = s => String(s || "").replace(/[^\u05d0-\u05eaa-zA-Z ]/g, " ").split(/\s+/).filter(Boolean)
+    .map(w => w.replace(/[ךםןףץ]/g, c => FIN[c]).replace(/[אוי]/g, "") || w);
+  const wa = words(a), wb = words(b);
+  if (!wa.length || !wb.length) return 0;
+  const sim = (x, y) => {
+    const d = Array.from({ length: x.length + 1 }, (_, i) => [i]);
+    for (let j = 1; j <= y.length; j++) d[0][j] = j;
+    for (let i = 1; i <= x.length; i++) for (let j = 1; j <= y.length; j++)
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (x[i - 1] === y[j - 1] ? 0 : 1));
+    return 1 - d[x.length][y.length] / Math.max(x.length, y.length);
+  };
+  // Every word of the shorter name against its best partner in the other.
+  const [s, l] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
+  const score = s.reduce((t, w) => t + Math.max(...l.map(x => sim(w, x))), 0) / s.length;
+  return s.length < l.length ? score * 0.85 : score;   // a lone first name is weaker
+}
 
 // ---- Salary cost vs last month ------------------------------------------
 // SAMPLE DATA ONLY (Kateryna 2026-11-22: "שיקח נתונים בהמשך") -- shows how
