@@ -102,14 +102,16 @@ const COMPANIES = [
   { id: "ubr",  name: 'יו.בי.אר שטיפת רכב בע"מ',      tabs: true },
   { id: "bui",  name: "בי. יו .אי. שטיפת רכבים",       tabs: true },
   { id: "aa",   name: 'א.א. רכב ורכש בע"מ',            tabs: false },
-  { id: "rami", name: 'רמי מרדכיב שירותי שטיפה בע"מ',  tabs: false },
+  { id: "rami", name: 'רמי מרדכיב שירותי שטיפה בע"מ',  tabs: false,
+    // Its three branches (Kateryna 2026-11-22).
+    branches: ["גבעת שמואל", "פתח תקווה", "מפגש"] },
 ];
 const TABS = [
   { id: "hr",      label: "טיפול כוח אדם", icon: "👥", text: "כאן יופיע הטיפול בכוח האדם של החברה." },
   { id: "payslip", label: "טיפול תלוש",   icon: "🧾", text: "כאן יופיע הטיפול בתלושי השכר של החברה." },
 ];
 
-let current = { company: null, tab: "hr" };
+let current = { company: null, tab: "hr", branch: null };
 
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -132,7 +134,15 @@ function renderContent() {
   const c = COMPANIES.find(x => x.id === current.company);
   if (!c) { el.innerHTML = '<div class="empty-hint">בחרי חברה</div>'; return; }
   if (!c.tabs) {
-    el.innerHTML = `<div class="panel"><div class="panel-title"><button class="back-btn" onclick="selectCompany(null)">→ חזרה</button>${escapeHtml(c.name)}</div>${placeholder("💰", "כאן יופיע הטיפול בשכר של החברה.")}</div>`;
+    let body = placeholder("💰", "כאן יופיע הטיפול בשכר של החברה.");
+    if (c.branches) {
+      const br = c.branches.includes(current.branch) ? current.branch : c.branches[0];
+      body = `<div class="tabs">${c.branches.map(b =>
+          `<button class="tab ${b === br ? "active" : ""}" data-branch="${escapeHtml(b)}">📍 ${escapeHtml(b)}</button>`).join("")}</div>
+        ${placeholder("📍", `כאן יופיע הטיפול בשכר של סניף ${br}.`)}`;
+    }
+    el.innerHTML = `<div class="panel"><div class="panel-title"><button class="back-btn" onclick="selectCompany(null)">→ חזרה</button>${escapeHtml(c.name)}</div>${body}</div>`;
+    el.querySelectorAll("[data-branch]").forEach(b => b.addEventListener("click", () => { current.branch = b.dataset.branch; save(); renderContent(); }));
     return;
   }
   const tab = TABS.find(t => t.id === current.tab) || TABS[0];
