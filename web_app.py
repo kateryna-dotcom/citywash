@@ -45,6 +45,7 @@ import pension_companies
 import branches
 import companies
 import invoice_store
+import salary_store
 import invoice_ingest
 import suppliers
 import item_matcher
@@ -157,6 +158,11 @@ def _startup():
         pension_store.init_db()
     except Exception as e:  # noqa: BLE001
         print(f"[startup] pension_store.init_db() skipped: {e}")
+
+    try:
+        salary_store.init_db()
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] salary_store.init_db() skipped: {e}")
 
     try:
         invoice_store.init_db()
@@ -1040,6 +1046,45 @@ async def inventory_set_company(record_id: int, request: Request):
     except Exception as e:  # noqa: BLE001
         return Response(f"Error updating company: {e}", status_code=500)
     return {"status": "updated"}
+
+
+_SALARY_COMPANIES = {"abt", "ubr", "bui", "aa", "rami"}
+_MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+@app.get("/api/salary/sheet")
+def salary_sheet_get(request: Request, company: str, month: str):
+    """The שכר tab's monthly work sheet for one company ({} if none yet)."""
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    if company not in _SALARY_COMPANIES or not _MONTH_RE.match(month or ""):
+        return Response("bad company or month", status_code=400)
+    try:
+        row = salary_store.get_sheet(company, month)
+        return {"data": row["data"] if row else None,
+                "updated_at": row["updated_at"] if row else None,
+                "months": salary_store.list_months(company)}
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error loading sheet: {e}", status_code=500)
+
+
+@app.post("/api/salary/sheet")
+async def salary_sheet_save(request: Request):
+    unauthorized = _require_api_auth(request)
+    if unauthorized:
+        return unauthorized
+    payload = await request.json()
+    company, month, data = payload.get("company"), payload.get("month"), payload.get("data")
+    if company not in _SALARY_COMPANIES or not _MONTH_RE.match(month or "") or not isinstance(data, dict):
+        return Response("bad company, month or data", status_code=400)
+    if len(str(data)) > 2_000_000:
+        return Response("sheet too large", status_code=413)
+    try:
+        salary_store.save_sheet(company, month, data)
+    except Exception as e:  # noqa: BLE001
+        return Response(f"Error saving sheet: {e}", status_code=500)
+    return {"status": "saved"}
 
 
 @app.get("/api/credits/list")

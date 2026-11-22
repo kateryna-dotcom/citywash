@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>שכר</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root {
     --blue-dark: #0b4f8a; --blue: #1e6fb8; --blue-light: #eaf3fb;
@@ -47,6 +48,31 @@
     border-radius: 20px; font-size: 12.5px; font-weight: 600; margin: 8px 0;
   }
   .empty-hint { text-align: center; color: var(--muted); padding: 50px 16px; }
+
+  /* Monthly work sheet (רמי מרדכיב) */
+  .sheet-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .sheet-bar input[type=month] { padding: 6px 9px; border: 1px solid var(--border); border-radius: 8px; font-family: inherit; font-size: 14px; }
+  .sbtn {
+    background: #fff; border: 1px solid var(--blue); color: var(--blue); border-radius: 8px; padding: 6px 12px;
+    font-size: 13.5px; font-family: inherit; font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  .sbtn.primary { background: var(--blue); color: #fff; }
+  .sbtn:hover { filter: brightness(.96); }
+  .save-state { font-size: 12.5px; color: var(--muted); }
+  .save-state.err { color: #c0392b; }
+  .sheet-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+  table.sheet { border-collapse: collapse; font-size: 13px; min-width: 100%; }
+  table.sheet th { background: var(--blue-light); color: var(--blue-dark); font-weight: 600; padding: 6px 4px; border-bottom: 1px solid var(--border); white-space: nowrap; position: sticky; top: 0; }
+  table.sheet td { border-bottom: 1px solid #eef3f7; border-inline-start: 1px solid #eef3f7; padding: 0; }
+  table.sheet input { width: 100%; border: none; padding: 6px 5px; font-family: inherit; font-size: 13px; background: transparent; color: var(--text); }
+  table.sheet input:focus { outline: 2px solid var(--blue); background: #fff; }
+  table.sheet td.num input { text-align: center; direction: ltr; font-variant-numeric: tabular-nums; }
+  table.sheet tr:hover td { background: #fafcfe; }
+  .del-row { background: none; border: none; color: #a7b6c4; cursor: pointer; font-size: 16px; padding: 4px 8px; }
+  .del-row:hover { color: #c0392b; }
+  .sheet-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; flex-wrap: wrap; gap: 8px; font-size: 13px; color: var(--muted); }
+  .pick-sheet { margin-top: 10px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13.5px; }
+  .pick-sheet select { padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; font-family: inherit; }
 
   /* Salary cost vs last month */
   .cost { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin-bottom: 16px; }
@@ -102,14 +128,22 @@ const COMPANIES = [
   { id: "ubr",  name: 'יו.בי.אר שטיפת רכב בע"מ',      tabs: true },
   { id: "bui",  name: "בי. יו .אי. שטיפת רכבים",       tabs: true },
   { id: "aa",   name: 'א.א. רכב ורכש בע"מ',            tabs: false },
-  { id: "rami", name: 'רמי מרדכיב שירותי שטיפה בע"מ',  tabs: false },
+  { id: "rami", name: 'רמי מרדכיב שירותי שטיפה בע"מ',  tabs: false,
+    // Its three branches (Kateryna 2026-11-22), in the order of her
+    // monthly Excel; `key` is the branch title as written in that file.
+    sheet: true,
+    branches: [
+      { key: "פתח תקווה", label: "פתח תקווה" },
+      { key: "גבעת שמואל", label: "גבעת שמואל" },
+      { key: "מפגש פתח תקווה", label: "מפגש" },
+    ] },
 ];
 const TABS = [
   { id: "hr",      label: "טיפול כוח אדם", icon: "👥", text: "כאן יופיע הטיפול בכוח האדם של החברה." },
   { id: "payslip", label: "טיפול תלוש",   icon: "🧾", text: "כאן יופיע הטיפול בתלושי השכר של החברה." },
 ];
 
-let current = { company: null, tab: "hr" };
+let current = { company: null, tab: "hr", branch: null };
 
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -130,9 +164,17 @@ function placeholder(icon, text) {
 function renderContent() {
   const el = document.getElementById("content");
   const c = COMPANIES.find(x => x.id === current.company);
+  // The cost chart is the main page; inside a company, its work comes first.
+  document.getElementById("cost").style.display = c ? "none" : "";
   if (!c) { el.innerHTML = '<div class="empty-hint">בחרי חברה</div>'; return; }
   if (!c.tabs) {
-    el.innerHTML = `<div class="panel"><div class="panel-title"><button class="back-btn" onclick="selectCompany(null)">→ חזרה</button>${escapeHtml(c.name)}</div>${placeholder("💰", "כאן יופיע הטיפול בשכר של החברה.")}</div>`;
+    let body = placeholder("💰", "כאן יופיע הטיפול בשכר של החברה.");
+    if (c.sheet) {
+      el.innerHTML = `<div class="panel"><div class="panel-title"><button class="back-btn" onclick="selectCompany(null)">→ חזרה</button>${escapeHtml(c.name)}</div><div id="sheetRoot"></div></div>`;
+      Sheet.open(c);
+      return;
+    }
+    el.innerHTML = `<div class="panel"><div class="panel-title"><button class="back-btn" onclick="selectCompany(null)">→ חזרה</button>${escapeHtml(c.name)}</div>${body}</div>`;
     return;
   }
   const tab = TABS.find(t => t.id === current.tab) || TABS[0];
@@ -154,6 +196,275 @@ function selectCompany(id) {
 // Remember the last company/tab for this viewer only.
 function save() { try { localStorage.setItem("salary.view", JSON.stringify(current)); } catch (e) {} }
 try { Object.assign(current, JSON.parse(localStorage.getItem("salary.view") || "{}")); } catch (e) {}
+
+
+// ---- Monthly work sheet (רמי מרדכיב) ---------------------------------------
+// Same columns as Kateryna's own monthly Excel (one block per branch). Every
+// cell is editable; changes auto-save to /api/salary/sheet. Import reads her
+// workbook (a month's sheet), export writes the same layout back out.
+const SHEET_COLS = [
+  { k: "name", label: "שם העובד", w: 150 },
+  { k: "num", label: "מספר עובד", w: 58, num: true },
+  { k: "id", label: "ת.ז", w: 92, num: true },
+  { k: "start", label: "תחילת עבודה", w: 88, num: true },
+  { k: "pension", label: "פנסיה", w: 66 },
+  { k: "rate", label: "שעתי", w: 86 },
+  { k: "price", label: "מחיר לשעה", w: 62, num: true },
+  { k: "h100", label: "100%", x: 1, w: 58, num: true },
+  { k: "h125", label: "125%", x: 1.25, w: 52, num: true },
+  { k: "h150", label: "150%", x: 1.5, w: 52, num: true },
+  { k: "h200", label: "200%", x: 2, w: 52, num: true },
+  { k: "days", label: "ימי עבודה", w: 50, num: true },
+  { k: "holidays", label: "ימי חג", w: 46, num: true },
+  { k: "vacation", label: "חופשה", w: 46, num: true },
+  { k: "travel", label: "נסיעות", w: 56, num: true },
+  { k: "bonus", label: "בונוס", w: 52, num: true },
+  { k: "total", label: 'סה"כ', w: 64, num: true },
+  { k: "advance", label: "מפרעה", w: 56, num: true },
+  { k: "notes", label: "הערות", w: 260 },
+];
+// Columns carried over when starting a month from the previous one.
+const KEEP_ON_COPY = ["name", "num", "id", "start", "pension", "rate", "price", "notes"];
+const HE_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
+
+const Sheet = {
+  company: null, month: null, data: null, branch: null, months: [], timer: null,
+
+  async open(c) {
+    this.company = c;
+    if (!this.month) {
+      const d = new Date();
+      this.month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      try { this.month = localStorage.getItem("salary.sheetMonth") || this.month; } catch (e) {}
+    }
+    this.branch = c.branches.some(b => b.key === current.branch) ? current.branch : c.branches[0].key;
+    await this.load();
+  },
+
+  emptyData() {
+    const branches = {};
+    this.company.branches.forEach(b => { branches[b.key] = []; });
+    return { branches };
+  },
+
+  async load() {
+    const root = document.getElementById("sheetRoot");
+    if (!root) return;
+    root.innerHTML = '<div class="save-state">טוען...</div>';
+    try {
+      const res = await fetch(`/api/salary/sheet?company=${this.company.id}&month=${this.month}`);
+      if (!res.ok) throw new Error(await res.text());
+      const j = await res.json();
+      this.data = j.data || this.emptyData();
+      this.months = j.months || [];
+    } catch (e) {
+      this.data = this.emptyData();
+      this.loadError = String(e.message || e);
+    }
+    this.company.branches.forEach(b => { if (!this.data.branches[b.key]) this.data.branches[b.key] = []; });
+    this.render();
+  },
+
+  monthName(m) { const [y, mo] = m.split("-").map(Number); return `${HE_MONTHS[mo - 1]} ${y}`; },
+
+  render() {
+    const root = document.getElementById("sheetRoot");
+    if (!root) return;
+    const rows = this.data.branches[this.branch] || [];
+    const saved = this.months.includes(this.month);
+    root.innerHTML = `
+      <div class="sheet-bar">
+        <label>חודש: <input type="month" id="sheetMonth" value="${this.month}"></label>
+        <button class="sbtn" id="btnImport">⬆ ייבוא מאקסל</button>
+        <button class="sbtn" id="btnCopyPrev">העתק עובדים מחודש קודם</button>
+        <button class="sbtn primary" id="btnExport">⬇ הורדת אקסל</button>
+        <span class="save-state ${this.loadError ? "err" : ""}" id="saveState">${this.loadError ? "שגיאה בטעינה: " + escapeHtml(this.loadError) : (saved ? "שמור ✓" : "חודש חדש — עדיין ריק")}</span>
+        <input type="file" id="importFile" accept=".xlsx,.xls" style="display:none">
+      </div>
+      <div id="pickSheet"></div>
+      <div class="tabs">${this.company.branches.map(b =>
+        `<button class="tab ${b.key === this.branch ? "active" : ""}" data-branch="${escapeHtml(b.key)}">📍 ${escapeHtml(b.label)} (${(this.data.branches[b.key] || []).length})</button>`).join("")}</div>
+      <div class="sheet-wrap"><table class="sheet">
+        <thead><tr>${SHEET_COLS.map(c => `<th style="min-width:${c.w}px">${c.label}</th>`).join("")}<th></th></tr></thead>
+        <tbody>${rows.map((r, i) => `<tr>${SHEET_COLS.map(c =>
+            `<td class="${c.num ? "num" : ""}"><input data-row="${i}" data-k="${c.k}" value="${escapeHtml(r[c.k] ?? "")}"></td>`).join("")}
+            <td><button class="del-row" data-del="${i}" title="מחיקת שורה">✕</button></td></tr>`).join("")
+          || `<tr><td colspan="${SHEET_COLS.length + 1}" style="padding:18px;text-align:center;color:var(--muted)">אין עובדים בסניף הזה בחודש ${escapeHtml(this.monthName(this.month))}</td></tr>`}</tbody>
+      </table></div>
+      <div class="sheet-foot">
+        <button class="sbtn" id="btnAddRow">+ הוסף עובד</button>
+        <span>${rows.length} עובדים · ${escapeHtml(this.monthName(this.month))}</span>
+      </div>`;
+    root.querySelector("#sheetMonth").addEventListener("change", e => {
+      if (!e.target.value) return;
+      this.month = e.target.value;
+      try { localStorage.setItem("salary.sheetMonth", this.month); } catch (err) {}
+      this.load();
+    });
+    root.querySelectorAll("[data-branch]").forEach(b => b.addEventListener("click", () => {
+      this.branch = b.dataset.branch; current.branch = this.branch; save(); this.render();
+    }));
+    root.querySelectorAll("input[data-k]").forEach(inp => inp.addEventListener("input", () => {
+      this.data.branches[this.branch][Number(inp.dataset.row)][inp.dataset.k] = inp.value;
+      this.scheduleSave();
+    }));
+    root.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () => {
+      const r = this.data.branches[this.branch][Number(b.dataset.del)];
+      if (!confirm(`למחוק את השורה${r && r.name ? " של " + r.name : ""}?`)) return;
+      this.data.branches[this.branch].splice(Number(b.dataset.del), 1);
+      this.saveNow(); this.render();
+    }));
+    root.querySelector("#btnAddRow").addEventListener("click", () => {
+      this.data.branches[this.branch].push({});
+      this.saveNow(); this.render();
+      const inputs = root.querySelectorAll('input[data-k="name"]');
+      if (inputs.length) inputs[inputs.length - 1].focus();
+    });
+    root.querySelector("#btnExport").addEventListener("click", () => this.exportXlsx());
+    root.querySelector("#btnCopyPrev").addEventListener("click", () => this.copyPrev());
+    const file = root.querySelector("#importFile");
+    root.querySelector("#btnImport").addEventListener("click", () => file.click());
+    file.addEventListener("change", () => { if (file.files[0]) this.importXlsx(file.files[0]); });
+  },
+
+  setState(text, err) {
+    const el = document.getElementById("saveState");
+    if (el) { el.textContent = text; el.classList.toggle("err", !!err); }
+  },
+  scheduleSave() {
+    this.setState("שומר...");
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => this.saveNow(), 700);
+  },
+  async saveNow() {
+    clearTimeout(this.timer);
+    try {
+      const res = await fetch("/api/salary/sheet", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ company: this.company.id, month: this.month, data: this.data }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      if (!this.months.includes(this.month)) this.months.push(this.month);
+      this.setState("נשמר ✓");
+    } catch (e) {
+      this.setState("שגיאה בשמירה: " + (e.message || e), true);
+    }
+  },
+
+  hasData() { return Object.values(this.data.branches).some(r => r.length); },
+
+  async copyPrev() {
+    const [y, m] = this.month.split("-").map(Number);
+    const d = new Date(y, m - 2, 1);
+    const prev = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const res = await fetch(`/api/salary/sheet?company=${this.company.id}&month=${prev}`);
+    const j = res.ok ? await res.json() : {};
+    if (!j.data) { alert(`אין נתונים שמורים ל${this.monthName(prev)}`); return; }
+    if (this.hasData() && !confirm(`בחודש ${this.monthName(this.month)} כבר יש נתונים. להחליף ברשימת העובדים מ${this.monthName(prev)} (בלי שעות)?`)) return;
+    const out = this.emptyData();
+    Object.entries(j.data.branches || {}).forEach(([k, rows]) => {
+      out.branches[k] = rows.map(r => Object.fromEntries(KEEP_ON_COPY.filter(f => r[f] != null).map(f => [f, r[f]])));
+    });
+    this.data = out; this.saveNow(); this.render();
+  },
+
+  // ---- Excel import: one month's sheet of her workbook -----------------
+  importXlsx(file) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      let wb;
+      try { wb = XLSX.read(new Uint8Array(e.target.result), { type: "array", cellDates: true }); }
+      catch (err) { alert("לא הצלחתי לקרוא את הקובץ: " + err.message); return; }
+      const want = HE_MONTHS[Number(this.month.split("-")[1]) - 1];
+      const match = wb.SheetNames.find(n => n.trim() === want);
+      const pick = document.getElementById("pickSheet");
+      pick.innerHTML = `<div class="pick-sheet">ייבוא לחודש ${escapeHtml(this.monthName(this.month))} מהגיליון:
+        <select id="sheetSel">${wb.SheetNames.map((n, i) => `<option value="${i}" ${n === match ? "selected" : ""}>${escapeHtml(n)}</option>`).join("")}</select>
+        <button class="sbtn primary" id="doImport">ייבא</button><button class="sbtn" id="cancelImport">ביטול</button></div>`;
+      pick.querySelector("#cancelImport").onclick = () => { pick.innerHTML = ""; };
+      pick.querySelector("#doImport").onclick = () => {
+        // By index: sheet names can end in a space ("אוקטובר "), which an
+        // option's text value would lose.
+        const parsed = this.parseSheet(wb.Sheets[wb.SheetNames[Number(pick.querySelector("#sheetSel").value)]]);
+        const count = Object.values(parsed.branches).reduce((s, r) => s + r.length, 0);
+        if (!count) { alert("לא נמצאו עובדים בגיליון הזה"); return; }
+        if (this.hasData() && !confirm(`להחליף את הנתונים של ${this.monthName(this.month)} ב-${count} עובדים מהקובץ?`)) return;
+        this.data = parsed; pick.innerHTML = ""; this.saveNow(); this.render();
+      };
+    };
+    reader.readAsArrayBuffer(file);
+    document.getElementById("importFile").value = "";
+  },
+
+  fmtCell(v) {
+    if (v == null) return "";
+    if (v instanceof Date) {
+      const p = n => String(n).padStart(2, "0");
+      return `${p(v.getDate())}/${p(v.getMonth() + 1)}/${v.getFullYear()}`;
+    }
+    if (typeof v === "number") return String(Math.round(v * 100) / 100);
+    return String(v).trim();
+  },
+
+  // Blocks: a branch title row, then a "שם העובד" header row, then employees.
+  // Columns are positional, as in her file (A..R, notes from S onward).
+  parseSheet(ws) {
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
+    const out = this.emptyData();
+    let branch = null;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i] || [];
+      const first = this.fmtCell(r[0]);
+      const next = rows[i + 1] || [];
+      if (first && this.fmtCell(next[0]) === "שם העובד") { branch = this.branchKey(first, out); continue; }
+      if (first === "שם העובד" || !branch || !first) continue;
+      const row = {};
+      SHEET_COLS.forEach((c, idx) => {
+        if (c.k === "notes") {
+          const notes = r.slice(idx).map(v => this.fmtCell(v)).filter(Boolean);
+          if (notes.length) row.notes = notes.join(" | ");
+        } else {
+          const v = this.fmtCell(r[idx]);
+          if (v !== "") row[c.k] = v;
+        }
+      });
+      out.branches[branch].push(row);
+    }
+    return out;
+  },
+  branchKey(title, out) {
+    const t = title.trim();
+    const known = this.company.branches.find(b => b.key === t)
+      || this.company.branches.find(b => t.includes("מפגש") ? b.key.includes("מפגש") : b.key === t);
+    const key = known ? known.key : t;
+    if (!out.branches[key]) out.branches[key] = [];
+    return key;
+  },
+
+  // ---- Excel export: same layout as her workbook ------------------------
+  exportXlsx() {
+    const toCell = (c, v) => {
+      if (v == null || v === "") return null;
+      if (c.num && /^-?\d+(\.\d+)?$/.test(String(v).trim())) return Number(v);
+      return v;
+    };
+    const aoa = [];
+    const keys = [...this.company.branches.map(b => b.key),
+                  ...Object.keys(this.data.branches).filter(k => !this.company.branches.some(b => b.key === k))];
+    keys.forEach(k => {
+      aoa.push([k]);
+      aoa.push(SHEET_COLS.map(c => c.x ?? c.label));
+      (this.data.branches[k] || []).forEach(r => aoa.push(SHEET_COLS.map(c => toCell(c, r[c.k]))));
+      aoa.push([]);
+    });
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = SHEET_COLS.map(c => ({ wch: Math.max(6, Math.round(c.w / 7)) }));
+    const wb = XLSX.utils.book_new();
+    wb.Workbook = { Views: [{ RTL: true }] };
+    XLSX.utils.book_append_sheet(wb, ws, HE_MONTHS[Number(this.month.split("-")[1]) - 1]);
+    XLSX.writeFile(wb, `שכר_${this.company.id === "rami" ? "רמי_מרדכיב" : this.company.id}_${this.month}.xlsx`);
+  },
+};
 
 // ---- Salary cost vs last month ------------------------------------------
 // SAMPLE DATA ONLY (Kateryna 2026-11-22: "שיקח נתונים בהמשך") -- shows how
