@@ -106,6 +106,25 @@
   .trend-caption { font-size: 12.5px; color: var(--muted); margin-top: 14px; }
   .tooltip { position: fixed; background: var(--text); color: #fff; font-size: 12.5px; padding: 5px 9px; border-radius: 6px; pointer-events: none; display: none; z-index: 10; white-space: nowrap; }
 
+  /* Cash On Tab hours check */
+  .att { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 12px 18px; margin-bottom: 16px; }
+  .att-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13.5px; }
+  .att-bar b { color: var(--blue-dark); }
+  .att-bar .hint { color: var(--muted); font-size: 12.5px; }
+  .att-msg { font-size: 12.5px; }
+  .att-msg.err { color: #c0392b; }
+  .att-res { margin-top: 12px; }
+  .att-filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+  .fbtn { border: 1px solid var(--border); background: #fff; border-radius: 20px; padding: 4px 12px; font-size: 12.5px; font-family: inherit; cursor: pointer; }
+  .fbtn.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+  table.att-t { border-collapse: collapse; width: 100%; font-size: 13px; }
+  table.att-t th { background: var(--blue-light); color: var(--blue-dark); font-weight: 600; padding: 6px 8px; text-align: right; white-space: nowrap; }
+  table.att-t td { padding: 6px 8px; border-bottom: 1px solid #eef3f7; white-space: nowrap; }
+  table.att-t td.t { direction: ltr; text-align: right; font-variant-numeric: tabular-nums; }
+  table.att-t tr.bad td { background: #fff6f5; }
+  .chip { display: inline-block; font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 10px; margin-inline-end: 4px; background: #fde7e4; color: #b3261e; }
+  .att-ok { color: #1a8a4a; font-weight: 600; padding: 10px 0; }
+
   @media (max-width: 600px) {
     .row { grid-template-columns: 100px 1fr 78px 54px; gap: 6px; }
     body { padding: 12px; }
@@ -118,6 +137,16 @@
   <h2>💰 שכר</h2>
 
   <div class="companies" id="companies"></div>
+  <div class="att" id="att">
+    <div class="att-bar">
+      <b>⏱ שעות עובדים (Cash On Tab)</b>
+      <span class="hint" id="attInfo">העלי את קובץ השעות שהורדת מ-Cash On Tab לבדיקת טעויות</span>
+      <button class="sbtn" onclick="document.getElementById('attFile').click()">📤 העלאת קובץ שעות</button>
+      <input type="file" id="attFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="Att.load(this.files[0]); this.value=''">
+      <span class="att-msg" id="attMsg"></span>
+    </div>
+    <div class="att-res" id="attRes"></div>
+  </div>
   <div class="cost" id="cost"></div>
   <div class="tooltip" id="tooltip"></div>
   <div id="content"><div class="empty-hint">בחרי חברה</div></div>
@@ -169,6 +198,7 @@ function renderContent() {
   const c = COMPANIES.find(x => x.id === current.company);
   // The cost chart is the main page; inside a company, its work comes first.
   document.getElementById("cost").style.display = c ? "none" : "";
+  document.getElementById("att").style.display = c ? "none" : "";
   if (!c) { el.innerHTML = '<div class="empty-hint">בחרי חברה</div>'; return; }
   if (!c.tabs) {
     let body = placeholder("💰", "כאן יופיע הטיפול בשכר של החברה.");
@@ -543,6 +573,171 @@ const Sheet = {
     wb.Workbook = { Views: [{ RTL: true }] };
     XLSX.utils.book_append_sheet(wb, ws, HE_MONTHS[Number(this.month.split("-")[1]) - 1]);
     XLSX.writeFile(wb, `שכר_${this.company.id === "rami" ? "רמי_מרדכיב" : this.company.id}_${this.month}.xlsx`);
+  },
+};
+
+// ---- Cash On Tab hours check -------------------------------------------
+// Kateryna uploads the employee-hours export from Cash On Tab; every shift
+// with a missing entry or exit, an entry before 07:15, or under two hours
+// is flagged. Read in the browser only -- nothing is stored. Columns are
+// found by their header names, so the exact layout of the export can vary.
+const ATT_EARLIEST = 7 * 60 + 15;   // 07:15
+const ATT_MIN_MINUTES = 120;        // 2 hours
+const ATT_PROBLEMS = {
+  noIn:  "חסרה כניסה",
+  noOut: "חסרה יציאה",
+  early: "כניסה לפני 07:15",
+  short: "פחות משעתיים",
+};
+const Att = {
+  rows: [], filter: "bad", fileName: "",
+
+  load(file) {
+    if (!file) return;
+    const msg = document.getElementById("attMsg");
+    msg.className = "att-msg"; msg.textContent = "קורא...";
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const wb = XLSX.read(new Uint8Array(e.target.result), { type: "array", cellDates: true });
+        let rows = [];
+        wb.SheetNames.forEach(n => { rows = rows.concat(this.parse(wb.Sheets[n])); });
+        if (!rows.length) throw new Error("לא נמצאו משמרות בקובץ (חסרות עמודות כניסה / יציאה?)");
+        this.rows = rows; this.fileName = file.name; this.filter = "bad";
+        msg.textContent = "";
+        this.render();
+      } catch (err) {
+        msg.className = "att-msg err"; msg.textContent = err.message || String(err);
+        document.getElementById("attRes").innerHTML = "";
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  },
+
+  text(v) { return v == null ? "" : String(v).trim(); },
+
+  // Minutes since midnight, or null. Accepts Date cells, Excel fractions
+  // and serials, and text such as "7:05", "07:05:00", "22/11/2026 07:05".
+  minutes(v) {
+    if (v == null || v === "") return null;
+    if (v instanceof Date) return v.getHours() * 60 + v.getMinutes();
+    if (typeof v === "number") {
+      const f = v - Math.floor(v);
+      if (v > 0 && v < 1 || f) return Math.round(f * 1440) % 1440;
+      return null;
+    }
+    const m = String(v).match(/(\d{1,2}):(\d{2})/);
+    return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+  },
+  dateText(v) {
+    if (v == null || v === "") return "";
+    if (v instanceof Date) {
+      const p = n => String(n).padStart(2, "0");
+      return `${p(v.getDate())}/${p(v.getMonth() + 1)}/${v.getFullYear()}`;
+    }
+    if (typeof v === "number" && v > 1) {
+      const d = XLSX.SSF.parse_date_code(v);
+      const p = n => String(n).padStart(2, "0");
+      return d ? `${p(d.d)}/${p(d.m)}/${d.y}` : String(v);
+    }
+    const m = String(v).match(/\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}/);
+    return m ? m[0] : this.text(v);
+  },
+  hhmm(min) {
+    if (min == null) return "";
+    return `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+  },
+
+  findCols(header) {
+    const h = header.map(x => this.text(x));
+    const find = (re, not) => h.findIndex((t, i) => t && re.test(t) && !(not && not.includes(i)));
+    const cin = find(/כניסה|התחלה|clock.?in|^in$|start|משעה/i);
+    const cout = find(/יציאה|סיום|clock.?out|^out$|end|עד שעה/i);
+    if (cin < 0 || cout < 0) return null;
+    const used = [cin, cout];
+    let name = find(/שם/, used);
+    if (name < 0) name = find(/עובד|employee|name/i, used);
+    const date = find(/תאריך|date|^יום$/i, used);
+    const branch = find(/סניף|תחנה|נקודת|branch|store|location|עסק/i, [...used, name]);
+    return { cin, cout, name, date, branch };
+  },
+
+  parse(ws) {
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
+    let cols = null, who = "", out = [];
+    for (const r of rows) {
+      if (!r || !r.some(v => this.text(v) !== "")) continue;
+      const maybe = this.findCols(r);
+      if (maybe) { cols = maybe; continue; }          // (repeated) header row
+      if (!cols) continue;
+      const vin = r[cols.cin], vout = r[cols.cout];
+      const filled = r.map(v => this.text(v)).filter(Boolean);
+      let name = cols.name >= 0 ? this.text(r[cols.name]) : "";
+      if (/סה.?כ|total|סיכום/i.test(filled.join(" "))) continue;   // totals
+      // A row holding only text (e.g. the employee's name above their shifts).
+      if (this.text(vin) === "" && this.text(vout) === "" && filled.length === 1
+          && cols.date >= 0 && this.text(r[cols.date]) === "") { who = filled[0]; continue; }
+      if (name) who = name; else name = who;
+      const date = cols.date >= 0 ? this.dateText(r[cols.date]) : this.dateText(vin) || this.dateText(vout);
+      const tin = this.minutes(vin), tout = this.minutes(vout);
+      if (!name && !date && tin == null && tout == null) continue;
+      const p = [];
+      if (tin == null) p.push("noIn");
+      if (tout == null) p.push("noOut");
+      if (tin != null && tin < ATT_EARLIEST) p.push("early");
+      let dur = null;
+      if (tin != null && tout != null) {
+        dur = tout - tin; if (dur < 0) dur += 1440;
+        if (dur < ATT_MIN_MINUTES) p.push("short");
+      }
+      out.push({ name, date, branch: cols.branch >= 0 ? this.text(r[cols.branch]) : "", tin, tout, dur, p });
+    }
+    return out;
+  },
+
+  render() {
+    const el = document.getElementById("attRes");
+    const bad = this.rows.filter(r => r.p.length);
+    const count = k => this.rows.filter(r => r.p.includes(k)).length;
+    const shown = this.filter === "all" ? this.rows
+      : this.filter === "bad" ? bad : this.rows.filter(r => r.p.includes(this.filter));
+    const people = new Set(this.rows.map(r => r.name).filter(Boolean)).size;
+    const hasBranch = this.rows.some(r => r.branch);
+    document.getElementById("attInfo").textContent =
+      `${this.fileName} · ${this.rows.length} משמרות · ${people} עובדים`;
+    const btn = (k, label, n) => `<button class="fbtn ${this.filter === k ? "active" : ""}" data-f="${k}">${label} (${n})</button>`;
+    el.innerHTML = `
+      ${bad.length ? "" : '<div class="att-ok">✓ לא נמצאו טעויות בקובץ</div>'}
+      <div class="att-filters">
+        ${btn("bad", "⚠ כל הטעויות", bad.length)}
+        ${Object.entries(ATT_PROBLEMS).map(([k, l]) => btn(k, l, count(k))).join("")}
+        ${btn("all", "כל המשמרות", this.rows.length)}
+        ${bad.length ? '<button class="sbtn" id="attExport" style="margin-inline-start:auto">⬇ הורדת הטעויות לאקסל</button>' : ""}
+      </div>
+      <div class="sheet-wrap"><table class="att-t">
+        <thead><tr><th>עובד</th><th>תאריך</th>${hasBranch ? "<th>סניף</th>" : ""}<th>כניסה</th><th>יציאה</th><th>שעות</th><th>בעיה</th></tr></thead>
+        <tbody>${shown.map(r => `<tr class="${r.p.length ? "bad" : ""}">
+          <td>${escapeHtml(r.name)}</td><td class="t">${escapeHtml(r.date)}</td>${hasBranch ? `<td>${escapeHtml(r.branch)}</td>` : ""}
+          <td class="t">${this.hhmm(r.tin) || "—"}</td><td class="t">${this.hhmm(r.tout) || "—"}</td>
+          <td class="t">${r.dur == null ? "" : this.hhmm(r.dur)}</td>
+          <td>${r.p.map(k => `<span class="chip">${ATT_PROBLEMS[k]}</span>`).join("")}</td></tr>`).join("")
+          || '<tr><td colspan="7" style="padding:14px;text-align:center;color:var(--muted)">אין שורות</td></tr>'}</tbody>
+      </table></div>`;
+    el.querySelectorAll("[data-f]").forEach(b => b.addEventListener("click", () => { this.filter = b.dataset.f; this.render(); }));
+    const ex = el.querySelector("#attExport");
+    if (ex) ex.addEventListener("click", () => this.exportBad());
+  },
+
+  exportBad() {
+    const aoa = [["עובד", "תאריך", "סניף", "כניסה", "יציאה", "שעות", "בעיה"]];
+    this.rows.filter(r => r.p.length).forEach(r => aoa.push([r.name, r.date, r.branch, this.hhmm(r.tin), this.hhmm(r.tout),
+      r.dur == null ? "" : this.hhmm(r.dur), r.p.map(k => ATT_PROBLEMS[k]).join(", ")]));
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [22, 12, 16, 8, 8, 8, 34].map(wch => ({ wch }));
+    const wb = XLSX.utils.book_new();
+    wb.Workbook = { Views: [{ RTL: true }] };
+    XLSX.utils.book_append_sheet(wb, ws, "טעויות");
+    XLSX.writeFile(wb, `טעויות_שעות_${this.fileName.replace(/\.[^.]+$/, "")}.xlsx`);
   },
 };
 
