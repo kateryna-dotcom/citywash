@@ -43,7 +43,37 @@
   }
   .empty-hint { text-align: center; color: var(--muted); padding: 50px 16px; }
 
+  /* Salary cost vs last month */
+  .cost { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin-bottom: 16px; }
+  .cost-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .cost-title { font-size: 15.5px; font-weight: 700; color: var(--blue-dark); }
+  .sample-tag { font-size: 12px; background: #fff4e0; color: #a86a00; padding: 2px 10px; border-radius: 20px; font-weight: 600; }
+  .tiles { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .tile { flex: 1; min-width: 150px; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
+  .tile .label { font-size: 12.5px; color: var(--muted); }
+  .tile .value { font-size: 22px; font-weight: 700; color: var(--blue-dark); font-variant-numeric: tabular-nums; }
+  .chg { font-weight: 700; white-space: nowrap; direction: ltr; display: inline-block; font-variant-numeric: tabular-nums; }
+  .chg.up { color: #c0392b; } .chg.down { color: #1a8a4a; } .chg.flat { color: var(--muted); font-weight: 500; }
+  .legend { display: flex; gap: 16px; font-size: 12.5px; color: var(--muted); margin-bottom: 8px; }
+  .legend i { display: inline-block; width: 12px; height: 10px; border-radius: 2px; margin-inline-end: 5px; vertical-align: middle; }
+  .row { display: grid; grid-template-columns: 190px 1fr 96px 70px; gap: 10px; align-items: center; padding: 6px 0; border-top: 1px solid #f0f4f8; }
+  .row .name { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bars { display: flex; flex-direction: column; gap: 3px; }
+  .bar { height: 12px; border-radius: 4px 0 0 4px; min-width: 2px; }
+  .bar.now { background: var(--blue); }
+  .bar.prev { background: #b9cbe0; height: 7px; }
+  .row .val { font-size: 13px; font-weight: 600; text-align: left; direction: ltr; font-variant-numeric: tabular-nums; }
+  .row .chg { font-size: 12.5px; text-align: left; }
+  .trend { display: flex; align-items: flex-end; gap: 8px; height: 110px; margin-top: 14px; padding-top: 6px; border-top: 1px solid var(--border); }
+  .trend-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .trend-bar { width: min(34px, 70%); background: #b9cbe0; border-radius: 4px 4px 0 0; }
+  .trend-bar.last { background: var(--blue); }
+  .trend-lbl { font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .trend-caption { font-size: 12.5px; color: var(--muted); margin-top: 14px; }
+  .tooltip { position: fixed; background: var(--text); color: #fff; font-size: 12.5px; padding: 5px 9px; border-radius: 6px; pointer-events: none; display: none; z-index: 10; white-space: nowrap; }
+
   @media (max-width: 600px) {
+    .row { grid-template-columns: 100px 1fr 78px 54px; gap: 6px; }
     body { padding: 12px; }
     .companies { grid-template-columns: 1fr 1fr; }
     .tab { padding: 9px 10px; }
@@ -54,6 +84,8 @@
   <h2>💰 שכר</h2>
 
   <div class="companies" id="companies"></div>
+  <div class="cost" id="cost"></div>
+  <div class="tooltip" id="tooltip"></div>
   <div id="content"><div class="empty-hint">בחרי חברה</div></div>
 
 <script>
@@ -118,7 +150,75 @@ function selectCompany(id) {
 function save() { try { localStorage.setItem("salary.view", JSON.stringify(current)); } catch (e) {} }
 try { Object.assign(current, JSON.parse(localStorage.getItem("salary.view") || "{}")); } catch (e) {}
 
+// ---- Salary cost vs last month ------------------------------------------
+// SAMPLE DATA ONLY (Kateryna 2026-11-22: "שיקח נתונים בהמשך") -- shows how
+// the chart will look; replace with real monthly totals per company once
+// the payroll data source is connected. Gross salary cost, ₪.
+const SAMPLE_COST = {
+  months: ["06/2026", "07/2026", "08/2026", "09/2026", "10/2026", "11/2026"],
+  byCompany: {
+    abt:  [182000, 176500, 191200, 188400, 193800, 201300],
+    ubr:  [96500,  98200,  94100,  101700, 99300,  97600],
+    bui:  [54200,  56800,  55100,  53900,  57400,  61200],
+    aa:   [31800,  30900,  33200,  32600,  31100,  30400],
+    rami: [27400,  28100,  27900,  28800,  29300,  29300],
+  },
+};
+
+function shekel(n) { return "₪" + Math.round(n).toLocaleString("he-IL"); }
+function change(now, before) {
+  if (!before) return '<span class="chg flat">—</span>';
+  const pct = (now - before) / before * 100;
+  if (Math.abs(pct) < 0.5) return '<span class="chg flat">= 0%</span>';
+  // Salary cost going up is shown red, down green.
+  return `<span class="chg ${pct > 0 ? "up" : "down"}">${pct > 0 ? "▲" : "▼"} ${Math.abs(pct).toFixed(1)}%</span>`;
+}
+
+function renderCost() {
+  const data = SAMPLE_COST;
+  const n = data.months.length;
+  const totals = data.months.map((_, i) => COMPANIES.reduce((s, c) => s + (data.byCompany[c.id]?.[i] || 0), 0));
+  const now = totals[n - 1], prev = totals[n - 2];
+  const rows = COMPANIES.map(c => ({ c, now: data.byCompany[c.id][n - 1], prev: data.byCompany[c.id][n - 2] }))
+    .sort((a, b) => b.now - a.now);
+  const max = Math.max(...rows.map(r => Math.max(r.now, r.prev)));
+  const tmax = Math.max(...totals);
+  document.getElementById("cost").innerHTML = `
+    <div class="cost-head">
+      <span class="cost-title">עלות שכר — ${data.months[n - 1]} מול ${data.months[n - 2]}</span>
+      <span class="sample-tag">נתוני דוגמה — הנתונים האמיתיים יחוברו בהמשך</span>
+    </div>
+    <div class="tiles">
+      <div class="tile"><div class="label">סה"כ עלות שכר החודש</div><div class="value">${shekel(now)}</div></div>
+      <div class="tile"><div class="label">חודש קודם</div><div class="value">${shekel(prev)}</div></div>
+      <div class="tile"><div class="label">שינוי</div><div class="value">${change(now, prev)}</div></div>
+    </div>
+    <div class="legend"><span><i style="background:var(--blue)"></i>החודש</span><span><i style="background:#b9cbe0"></i>חודש קודם</span></div>
+    ${rows.map(r => `<div class="row">
+      <span class="name" title="${escapeHtml(r.c.name)}">${escapeHtml(r.c.name)}</span>
+      <span class="bars">
+        <span class="bar now" style="width:${r.now / max * 100}%" data-tip="${escapeHtml(r.c.name)} · החודש · ${shekel(r.now)}"></span>
+        <span class="bar prev" style="width:${r.prev / max * 100}%" data-tip="${escapeHtml(r.c.name)} · חודש קודם · ${shekel(r.prev)}"></span>
+      </span>
+      <span class="val">${shekel(r.now)}</span>
+      ${change(r.now, r.prev)}
+    </div>`).join("")}
+    <div class="trend-caption">סה"כ עלות שכר — 6 חודשים אחרונים</div>
+    <div class="trend">${totals.map((t, i) => `<div class="trend-col">
+      <div class="trend-bar ${i === n - 1 ? "last" : ""}" style="height:${Math.max(t / tmax * 80, 4)}px" data-tip="${data.months[i]} · ${shekel(t)}"></div>
+      <span class="trend-lbl">${data.months[i]}</span></div>`).join("")}</div>`;
+  const tip = document.getElementById("tooltip");
+  document.querySelectorAll("#cost [data-tip]").forEach(el => {
+    el.addEventListener("mousemove", e => {
+      tip.textContent = el.dataset.tip; tip.style.display = "block";
+      tip.style.left = (e.clientX + 12) + "px"; tip.style.top = (e.clientY + 12) + "px";
+    });
+    el.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+  });
+}
+
 renderCompanies();
+renderCost();
 renderContent();
 </script>
 </body>
