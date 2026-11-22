@@ -210,7 +210,7 @@ const SHEET_COLS = [
   { k: "num", src: 1, label: "מספר עובד", w: 58, num: true },
   { k: "id", src: 2, label: "ת.ז", w: 92, num: true },
   { k: "start", src: 3, label: "תחילת עבודה", w: 88, num: true },
-  { k: "pension", src: 4, label: "פנסיה", w: 66 },
+  { k: "pension", src: 4, label: "פנסיה", w: 175 },
   { k: "rate", src: 5, label: "שעתי", w: 86 },
   { k: "price", src: 6, label: "מחיר לשעה", w: 62, num: true },
   { k: "h100", src: 7, label: "100%", x: 1, w: 58, num: true },
@@ -230,7 +230,7 @@ const SHEET_COLS = [
 // `src` is the column's position in her workbook; its 200% column (10) was
 // dropped at her request (2026-11-22) and is skipped on import.
 // Columns carried over when starting a month from the previous one.
-const KEEP_ON_COPY = ["name", "num", "id", "start", "pension", "rate", "price", "notes", "loan"];
+const KEEP_ON_COPY = ["name", "num", "id", "start", "pension", "rate", "price", "notes", "loan", "pensionAuto"];
 const HE_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"];
 
 const Sheet = {
@@ -268,7 +268,47 @@ const Sheet = {
       this.loadError = String(e.message || e);
     }
     this.company.branches.forEach(b => { if (!this.data.branches[b.key]) this.data.branches[b.key] = []; });
+    this.fillPension();
     this.render();
+  },
+
+  // Pension (Kateryna 2026-11-22): rows marked "ילד" (or anything else she
+  // wrote) are left alone; an empty cell gets the date pension starts --
+  // six months after the start of work. Such auto cells carry pensionAuto
+  // and are recomputed when the start date or the month changes; typing in
+  // the cell makes it hers.
+  startDate(v) {
+    const t = String(v || "").trim();
+    let m = t.match(/^(\d{1,2})[\/.](\d{1,2})[\/.](\d{2,4})$/);
+    if (m) {
+      const y = Number(m[3]) < 100 ? 2000 + Number(m[3]) : Number(m[3]);
+      return new Date(y, Number(m[2]) - 1, Number(m[1]));
+    }
+    const mi = HE_MONTHS.findIndex(n => t === n || t.startsWith(n + " "));
+    if (mi < 0) return null;
+    const ym = t.match(/(\d{4})/);
+    const [sy, sm] = this.month.split("-").map(Number);
+    const y = ym ? Number(ym[1]) : (mi + 1 > sm ? sy - 1 : sy);
+    return new Date(y, mi, 1);
+  },
+  pensionText(start) {
+    const d = this.startDate(start);
+    if (!d) return null;
+    const p = new Date(d.getFullYear(), d.getMonth() + 6, d.getDate());
+    const pad = n => String(n).padStart(2, "0");
+    const txt = `פנסיה מ-${pad(p.getDate())}/${pad(p.getMonth() + 1)}/${p.getFullYear()}`;
+    const [sy, sm] = this.month.split("-").map(Number);
+    return p <= new Date(sy, sm, 0) ? txt + " ⚠ להתחיל" : txt;
+  },
+  fillPension() {
+    Object.values(this.data.branches).forEach(rows => rows.forEach(r => this.fillPensionRow(r)));
+  },
+  fillPensionRow(r) {
+    const empty = r.pension == null || String(r.pension).trim() === "";
+    if (!empty && !r.pensionAuto) return;
+    const txt = this.pensionText(r.start);
+    if (txt) { r.pension = txt; r.pensionAuto = true; }
+    else if (r.pensionAuto) { delete r.pension; delete r.pensionAuto; }
   },
 
   // A month with nothing saved starts from the latest earlier saved month:
@@ -340,7 +380,14 @@ const Sheet = {
       this.load();
     });
     root.querySelectorAll("input[data-k]").forEach(inp => inp.addEventListener("input", () => {
-      this.data.branches[inp.dataset.b][Number(inp.dataset.row)][inp.dataset.k] = inp.value;
+      const row = this.data.branches[inp.dataset.b][Number(inp.dataset.row)];
+      row[inp.dataset.k] = inp.value;
+      if (inp.dataset.k === "pension") delete row.pensionAuto;
+      if (inp.dataset.k === "start" || (inp.dataset.k === "pension" && !inp.value.trim())) {
+        this.fillPensionRow(row);
+        const pin = root.querySelector(`input[data-k="pension"][data-b="${CSS.escape(inp.dataset.b)}"][data-row="${inp.dataset.row}"]`);
+        if (pin && pin !== inp) pin.value = row.pension ?? "";
+      }
       this.scheduleSave();
     }));
     root.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () => {
@@ -397,7 +444,7 @@ const Sheet = {
     const j = res.ok ? await res.json() : {};
     if (!j.data) { alert(`אין נתונים שמורים ל${this.monthName(prev)}`); return; }
     if (this.hasData() && !confirm(`בחודש ${this.monthName(this.month)} כבר יש נתונים. להחליף ברשימת העובדים מ${this.monthName(prev)} (בלי שעות)?`)) return;
-    this.data = this.keepColumns(j.data); this.template = null; this.saveNow(); this.render();
+    this.data = this.keepColumns(j.data); this.fillPension(); this.template = null; this.saveNow(); this.render();
   },
 
   // ---- Excel import: one month's sheet of her workbook -----------------
@@ -421,7 +468,7 @@ const Sheet = {
         const count = Object.values(parsed.branches).reduce((s, r) => s + r.length, 0);
         if (!count) { alert("לא נמצאו עובדים בגיליון הזה"); return; }
         if (this.hasData() && !confirm(`להחליף את הנתונים של ${this.monthName(this.month)} ב-${count} עובדים מהקובץ?`)) return;
-        this.data = parsed; pick.innerHTML = ""; this.saveNow(); this.render();
+        this.data = parsed; this.fillPension(); pick.innerHTML = ""; this.saveNow(); this.render();
       };
     };
     reader.readAsArrayBuffer(file);
