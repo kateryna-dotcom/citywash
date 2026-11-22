@@ -181,6 +181,13 @@ def _startup():
         print(f"[startup] ברקו סנטס re-parse backfill skipped: {e}")
 
     try:
+        # Link-delivered invoices recorded without a PDF (e.g. after morning
+        # changed its download links) get fetched again.
+        print(f"[startup] no-PDF link invoices refetched: {invoice_ingest.retry_linked_no_pdf()}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] no-PDF refetch skipped: {e}")
+
+    try:
         # A PDF holding several invoices becomes one card per invoice --
         # see invoice_ingest.split_pdf_by_invoice. Idempotent.
         split = invoice_ingest.split_existing_records()

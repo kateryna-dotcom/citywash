@@ -260,6 +260,24 @@ def replace_pdf_content(record_id: int, pdf_data: bytes, raw_text: str,
         conn.commit()
 
 
+def fill_missing_pdf(record_id: int, pdf_filename: str, pdf_data: bytes, raw_text: str,
+                     invoice_number: str, branch: str, company: str, line_items: list):
+    """A no_pdf_found record whose PDF could be fetched after all becomes a
+    normal needs_review invoice. Keeps a branch/company already set."""
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE invoice_records SET pdf_filename=%s, pdf_data=%s, raw_text=%s, "
+                "invoice_number=COALESCE(NULLIF(invoice_number, ''), %s), "
+                "branch=COALESCE(NULLIF(branch, ''), %s), company=COALESCE(NULLIF(company, ''), %s), "
+                "line_items=%s, status='needs_review', updated_at=now() "
+                "WHERE id=%s AND status='no_pdf_found'",
+                (pdf_filename, psycopg2.Binary(pdf_data), raw_text, invoice_number, branch, company,
+                 psycopg2.extras.Json(line_items) if line_items is not None else None, record_id),
+            )
+        conn.commit()
+
+
 def update_line_items(record_id: int, line_items: list):
     """Full replace of an invoice's line_items -- used after re-running the
     parser against the already-stored raw_text (e.g. following a parser

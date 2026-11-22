@@ -129,6 +129,13 @@ _INVOICE_ONE_LINK_RE = re.compile(
 _GREENINVOICE_LINK_RE = re.compile(
     r'href="(https://www\.greeninvoice\.co\.il/api/v1/documents/download\?[^"]+)"'
 )
+# Since ~2026-11, morning's "להורדת המסמך" button is a tracking link
+# (api.morning.co/communication/t/<id>.0.<token>; ".1." is the "לחצו כאן"
+# fallback, ".2." the payment page) that redirects to the same greeninvoice
+# download -- confirmed live on invoice 51564, which ends in application/pdf.
+_MORNING_TRACKED_LINK_RE = re.compile(
+    r'href="(https://api\.morning\.co/communication/t/[^"]+?\.[01]\.[^"]+)"'
+)
 
 
 def _fetch_linked_pdf(supplier_domain: str, html_body: str) -> bytes | None:
@@ -148,9 +155,18 @@ def _fetch_linked_pdf(supplier_domain: str, html_body: str) -> bytes | None:
         url = f"https://invoice-one.com/ViewerNew/api/GreeViewer/Document/Download?DocumentID={document_id}"
     elif supplier_domain == "morning.co":
         m = _GREENINVOICE_LINK_RE.search(html_body)
-        if not m:
+        if m:
+            url = html.unescape(m.group(1))
+        else:
+            # New tracking links: try the download button (.0.) first, then
+            # the "לא מצליחים להוריד" fallback (.1.); only a real PDF counts.
+            links = [html.unescape(x) for x in _MORNING_TRACKED_LINK_RE.findall(html_body)]
+            links.sort(key=lambda u: ".1." in u)
+            for link in links:
+                resp = requests.get(link, timeout=30)
+                if resp.ok and resp.content[:4] == b"%PDF":
+                    return resp.content
             return None
-        url = html.unescape(m.group(1))
     else:
         return None
     resp = requests.get(url, timeout=30)
@@ -1258,6 +1274,37 @@ def split_existing_records() -> int:
 # Message ids already checked for extra PDFs in this process -- so the
 # backfill below costs one Gmail fetch per message per restart, not per scan.
 _extra_pdfs_checked = set()
+
+
+def retry_linked_no_pdf() -> int:
+    """Startup backfill: link-delivered invoices (morning.co / invoice-one)
+    that were recorded as no_pdf_found -- e.g. ברקו סנטס 51563/51564 from
+    2026-11-21, when morning's download link changed format -- get their PDF
+    fetched again now. Returns how many were filled in."""
+    fixed = 0
+    for r in invoice_store.list_records(limit=1000):
+        domain = r.get("supplier_domain")
+        if r.get("status") != "no_pdf_found" or domain not in gmail_client.LINK_INVOICE_DOMAINS:
+            continue
+        try:
+            message = gmail_client.get_message(r["gmail_message_id"])
+            html_body = gmail_client.extract_html_body(message)
+            pdf_bytes = _fetch_linked_pdf(domain, html_body)
+        except Exception:  # noqa: BLE001
+            continue
+        if not pdf_bytes:
+            continue
+        text = _extract_pdf_text(pdf_bytes)
+        branch_text = text + "\n" + html_body
+        invoice_store.fill_missing_pdf(
+            r["id"], f"{r['gmail_message_id']}.pdf", pdf_bytes, text,
+            guess_invoice_number(r.get("subject") or "", text, pdf_bytes=pdf_bytes),
+            _guess_branch(r.get("subject") or "", branch_text),
+            companies.detect_company(_company_detection_text(pdf_bytes, text)),
+            parse_line_items(domain, text, pdf_bytes=pdf_bytes) or None,
+        )
+        fixed += 1
+    return fixed
 
 
 def _backfill_extra_pdfs(message_id: str) -> int:
