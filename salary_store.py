@@ -1,7 +1,7 @@
 """
 Monthly salary work sheets for the שכר tab -- the table Kateryna keeps per
 company and month (one block per branch: employee, ת.ז, rate, hours at
-100/125/150/200%, days, travel, bonus, advance, notes). Stored as one JSON
+100/125/150%, days, travel, bonus, advance, notes). Stored as one JSON
 document per (company, month) so the sheet's columns can evolve without
 schema changes. Same Postgres database as invoice_store.py.
 """
@@ -59,3 +59,16 @@ def save_sheet(company: str, month: str, data: dict):
                 ON CONFLICT (company, month) DO UPDATE SET data=EXCLUDED.data, updated_at=now()
             """, (company, month, psycopg2.extras.Json(data)))
         conn.commit()
+
+
+def seed_sheet(company: str, month: str, data: dict) -> bool:
+    """Insert a sheet only if that month has nothing saved yet."""
+    with _get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO salary_sheets (company, month, data) VALUES (%s, %s, %s)
+                ON CONFLICT (company, month) DO NOTHING
+            """, (company, month, psycopg2.extras.Json(data)))
+            inserted = cur.rowcount == 1
+        conn.commit()
+    return inserted
