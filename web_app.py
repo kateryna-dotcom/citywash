@@ -165,6 +165,7 @@ def _startup():
         import salary_seed
         if salary_store.seed_sheet("rami", "2026-10", salary_seed.RAMI_OCTOBER_2026):
             print("[startup] seeded רמי מרדכיב October 2026 salary sheet")
+        salary_store.move_loan_notes("rami")
     except Exception as e:  # noqa: BLE001
         print(f"[startup] salary_store.init_db() skipped: {e}")
 

@@ -72,3 +72,30 @@ def seed_sheet(company: str, month: str, data: dict) -> bool:
             inserted = cur.rowcount == 1
         conn.commit()
     return inserted
+
+
+def move_loan_notes(company: str) -> int:
+    """Move "הלוואה" parts of a row's notes into its own `loan` field
+    (sheets saved before the loan column existed). Idempotent."""
+    moved = 0
+    for month in list_months(company):
+        sheet = get_sheet(company, month)
+        data = (sheet or {}).get("data") or {}
+        changed = False
+        for rows in (data.get("branches") or {}).values():
+            for row in rows:
+                if row.get("loan") or "הלוואה" not in (row.get("notes") or ""):
+                    continue
+                parts = [p.strip() for p in row["notes"].split("|")]
+                loan = [p for p in parts if "הלוואה" in p]
+                rest = [p for p in parts if "הלוואה" not in p and p]
+                row["loan"] = " | ".join(loan)
+                if rest:
+                    row["notes"] = " | ".join(rest)
+                else:
+                    row.pop("notes", None)
+                changed = True
+                moved += 1
+        if changed:
+            save_sheet(company, month, data)
+    return moved
