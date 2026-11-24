@@ -1007,6 +1007,51 @@ def parse_galor(text: str, pdf_bytes: bytes = None) -> list:
     return []
 
 
+# fogel.co.il (פוגל אופנה ואביזרים לרכב, sent from ilanline64@gmail.com).
+# One invoice per page, "חשבונית מס  מספר : 01/057748". pypdf's plain text
+# drops the Latin size letters from item names ("מגן שמש" for "מגן שמש BLUE
+# מידה XL"), so rows are read from pypdf's layout text instead, where each
+# row is "total  unit-price  qty  <name>  <item code>  <row #>" -- but the
+# name comes out in visual (reversed) order and is turned back here.
+_FOGEL_DOC_NUMBER_RE = re.compile(r"(?:מספר|רפסמ)\s*:?\s*(\d{2}/\d{6})(?!\d)")
+_FOGEL_ROW_RE = re.compile(
+    r"^\s*(?P<total>[\d,]+\.\d{2})\s+(?P<price>[\d,]+\.\d{2})\s+(?P<qty>[\d,]+\.\d{2})\s+"
+    r"(?P<desc>.+?)\s+(?P<code>\S*\d\S*)\s+(?P<row>\d{1,3})\s*$"
+)
+_LTR_RUN_RE = re.compile(r"[A-Za-z0-9]+(?:[.,/\-][A-Za-z0-9]+)*")
+_MIRROR = str.maketrans("()[]<>{}", ")(][><}{")
+
+
+def _visual_to_logical(s: str) -> str:
+    """Reverses a visually-ordered RTL string, keeping Latin/number runs
+    ("BLUE", "XL", "2016") in their own left-to-right order."""
+    rev = s[::-1].translate(_MIRROR)
+    return _LTR_RUN_RE.sub(lambda m: m.group(0)[::-1], rev)
+
+
+def parse_fogel(text: str, pdf_bytes: bytes = None) -> list:
+    if not pdf_bytes:
+        return []
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    items = []
+    for page in reader.pages:
+        layout = page.extract_text(extraction_mode="layout") or ""
+        for line in layout.splitlines():
+            m = _FOGEL_ROW_RE.match(line)
+            if not m:
+                continue
+            qty, price, total = _num(m["qty"]), _num(m["price"]), _num(m["total"])
+            code = m["code"]
+            items.append({
+                "sku": code,
+                "barcode": code if code.isdigit() and len(code) >= 8 else None,
+                "description": re.sub(r"\s+", " ", _visual_to_logical(m["desc"].strip())),
+                "quantity": qty, "unit_price": price, "total": total,
+                "confident": abs(round(qty * price, 2) - total) < 0.5,
+            })
+    return items
+
+
 _LINE_ITEM_PARSERS = {
     "emi-1.com": parse_emi,
     "moshaev-inv.com": parse_moshaev,
@@ -1018,6 +1063,7 @@ _LINE_ITEM_PARSERS = {
     "invoice-one.com": parse_petrotech,
     "morning.co": parse_barco_scents,
     "zbeda.com": parse_galor,
+    "fogel.co.il": parse_fogel,
 }
 
 
@@ -1097,6 +1143,12 @@ def _guess_branch(subject: str, text: str) -> str:
 
 def guess_invoice_number(subject: str, text: str, pdf_bytes: bytes = None) -> str:
     for source in (subject or "", text or ""):
+        # פוגל -- checked first: its "מספר : 01/057748חשבונית מס" puts the
+        # number BEFORE the label, so _INVOICE_NUMBER_RE would grab the
+        # customer number ("מספרכם 02199") printed after it instead.
+        m = _FOGEL_DOC_NUMBER_RE.search(source)
+        if m:
+            return m.group(1)
         m = _INVOICE_NUMBER_RE.search(source)
         if m:
             return m.group(1).strip()

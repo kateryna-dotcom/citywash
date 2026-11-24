@@ -91,6 +91,9 @@ def cashontab_code_hint(branch):
 BRANCH_ALT_SPELLINGS = {
     # ביתן ספארק's delivery address, 2026-11-12: "מושב שדה חמד".
     "שדי חמד": ["שדה חמד"],
+    # פוגל, 2026-11-24: bill-to is "תחנת דלק אלון / חבצלת", no "השרון".
+    # All three words required -- bare "חבצלת" is a common street name.
+    "חבצלת השרון": ["חבצלת דלק אלון"],
 }
 
 
