@@ -27,6 +27,10 @@ SUPPLIER_CASHONTAB_NAMES = {
     "invoice-one.com": "פטרוטק בע\"מ",
     "morning.co": "ברקו סנטס בע\"מ",
     "zbeda.com": "גלאור בע\"מ",
+    # Name printed on the invoice -- not yet confirmed against Cash On Tab's
+    # ספק list (2026-11-24). Invoices come from ilanline64@gmail.com, see
+    # gmail_client.SENDER_ALIASES.
+    "fogel.co.il": "פוגל אופנה ואביזרים לרכב בע\"מ",
 }
 
 # Cash On Tab's own ספק search sometimes doesn't match SUPPLIER_CASHONTAB_NAMES

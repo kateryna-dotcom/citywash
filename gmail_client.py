@@ -80,6 +80,19 @@ LINK_INVOICE_DOMAINS = [
 # invoices do carry a real .pdf attachment, just not from that domain.
 SENDER_ALIASES = {
     "hr.iqdox@gmail.com": "hadarrosen.com",
+    # פוגל אופנה ואביזרים לרכב בע"מ -- Ilan Fogel sends his invoices from his
+    # personal gmail (Kateryna 2026-11-24: one PDF with 17 invoices, "חשבוניות
+    # פוגל"). The same mailbox also sends quotes, scans and screenshots, so
+    # it's narrowed by SENDER_ALIAS_QUERY_FILTERS below.
+    "ilanline64@gmail.com": "fogel.co.il",
+}
+
+# Extra Gmail search terms ANDed into a SENDER_ALIASES clause, for a mailbox
+# that sends more than invoices. Fogel: only PDFs with חשבונית/חשבוניות in
+# the subject (checked live 2026-11-24 -- matches just the invoice email,
+# not "Fwd: Scan to email" / screenshots / "הצעת מחיר").
+SENDER_ALIAS_QUERY_FILTERS = {
+    "ilanline64@gmail.com": "filename:pdf subject:(חשבונית OR חשבוניות)",
 }
 
 
@@ -129,7 +142,12 @@ def _build_supplier_query(after: datetime | None) -> str:
     # have no has:attachment (those emails never carry one); SENDER_ALIASES
     # get the same has:attachment clause shape as SUPPLIER_DOMAINS, just
     # keyed by exact address instead of domain.
-    attachment_terms = [f"(from:{d} has:attachment)" for d in SUPPLIER_DOMAINS + list(SENDER_ALIASES)]
+    attachment_terms = [f"(from:{d} has:attachment)" for d in SUPPLIER_DOMAINS]
+    attachment_terms += [
+        f"(from:{a} has:attachment {SENDER_ALIAS_QUERY_FILTERS[a]})" if a in SENDER_ALIAS_QUERY_FILTERS
+        else f"(from:{a} has:attachment)"
+        for a in SENDER_ALIASES
+    ]
     link_terms = [f"(from:{d})" for d in LINK_INVOICE_DOMAINS]
     query = " OR ".join(attachment_terms + link_terms)
     if after:
