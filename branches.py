@@ -77,6 +77,9 @@ CASHONTAB_CODE_DISAMBIGUATION = {
     # Same for "באר יעקב" (codes 9 and 23) -- Kateryna confirmed
     # 2026-09-30 this branch is always code 23.
     "באר יעקב": "23",
+    # The name search for "פתח תקווה" also returns "פתח תקווה מפגש השרון"
+    # (code 39) -- Kateryna confirmed 2026-11-25 this branch is always 17.
+    "פתח תקווה": "17",
 }
 
 
